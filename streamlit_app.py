@@ -14,7 +14,7 @@ def load_data(path="dashboard_curated.csv"):
     for c in ["Programme Start Date", "Programme End Date", "Run_Month"]:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
-    # Friendly label for month (already created in your pipeline, but re-create if missing)
+    # Friendly label for month 
     if "Run_Month_Label" not in df.columns and "Run_Month" in df.columns:
         df["Run_Month_Label"] = df["Run_Month"].dt.strftime("%b-%Y")
 
@@ -222,7 +222,7 @@ with tab4:
                       title=f"Top {top_k} Organisations")
         st.plotly_chart(fig2, use_container_width=True, theme="streamlit")
 
-    # Seniority distribution (optional)
+    # Seniority distribution 
     if "Seniority" in df_f.columns:
         sen = df_f["Seniority"].value_counts().reset_index()
         sen.columns = ["Seniority", "Participants"]
