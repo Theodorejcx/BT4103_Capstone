@@ -54,7 +54,6 @@ with st.sidebar:
     # Time range by Run_Month
     if "Run_Month" in df.columns:
         min_m, max_m = df["Run_Month"].min(), df["Run_Month"].max()
-        default_range = (min_m, max_m)
 
         # Initialize default in session_state (so reset can restore it)
         if "run_month_range" not in st.session_state:
@@ -76,52 +75,36 @@ with st.sidebar:
     def _safe_key(label: str, suffix: str) -> str:
         return f"{label}_{suffix}".replace(" ", "_").lower()
 
-    def multiselect_with_select_all(label, series: pd.Series, default_all=True):
+    def multiselect_with_all_button(label, series: pd.Series, default_all=True):
         """
-        Multiselect with a 'Select all' checkbox that:
-        - Allows manual deselection even after selecting all
-        - Auto-unticks 'Select all' when selection != all options
-        - Initializes to 'all' (or empty) only once
+        Multiselect with a single 'Select all' button (no per-filter clear).
+        No st.rerun() needed; Streamlit re-runs automatically after button click.
         """
         s = series.copy().fillna("Unknown")
         options = sorted(s.unique().tolist())
 
-        ms_key  = _safe_key(label, "multi")
-        all_key = _safe_key(label, "all")
+        ms_key = _safe_key(label, "multi")
 
-        # 1) Initialize selection once
+        # Initialize once
         if ms_key not in st.session_state:
-            st.session_state[ms_key] = options if default_all else []
+            st.session_state[ms_key] = options[:] if default_all else []
 
-        # 2) Derive the checkbox's initial value from the current selection == all options
-        all_selected_now = set(st.session_state[ms_key]) == set(options)
-        select_all = st.checkbox(
-            f"Select all {label}",
-            value=all_selected_now,
-            key=all_key
-        )
+        # Keep only valid selections if option set changed (e.g., via date filter)
+        current = [v for v in st.session_state[ms_key] if v in options]
+        if current != st.session_state[ms_key]:
+            st.session_state[ms_key] = current
 
-        # 3) If user ticks the checkbox and not all are currently selected, select all ONCE
-        if select_all and not all_selected_now:
-            st.session_state[ms_key] = options
+        # One button: select all current options (state change triggers rerun automatically)
+        if st.button(f"Select all {label}", key=_safe_key(label, "btn_all")):
+            st.session_state[ms_key] = options[:]  # NO st.rerun()
 
-        # 4) Render multiselect using the current (possibly updated) selection
-        selected = st.multiselect(
-            label,
-            options,
-            default=st.session_state[ms_key],
-            key=ms_key
-        )
+        # Render multiselect bound to state (no default=)
+        st.multiselect(label, options, key=ms_key)
 
-        # 5) If 'Select all' is checked but user deselected something, auto-untick it
-        if st.session_state.get(all_key, False) and set(selected) != set(options):
-            st.session_state[all_key] = False  # this will reflect on next rerun
+        return st.session_state[ms_key]
 
-        return selected
-
-    # --- Clear all filters button ---
-    def clear_all_filters():
-        # Keys for multiselects + their select-all checkboxes
+    # --- Select and Clear all filters buttons ---
+    def select_all_filters():
         labels = [
             "Application Status",
             "Applicant Type",
@@ -131,26 +114,47 @@ with st.sidebar:
             "Seniority",
         ]
         for label in labels:
-            ms_key  = _safe_key(label, "multi")
-            all_key = _safe_key(label, "all")
-            if ms_key in st.session_state:
-                st.session_state[ms_key] = []          # deselect all
-            if all_key in st.session_state:
-                st.session_state[all_key] = False      # uncheck select-all
+            ms_key = _safe_key(label, "multi")
+            series = df[label].fillna("Unknown") if label in df.columns else pd.Series([], dtype="object")
+            options = sorted(series.unique().tolist())
+            st.session_state[ms_key] = options[:]  # select all
 
-        # Reset date range back to full span
+        # Reset date to full span
         if "Run_Month" in df.columns:
             min_m, max_m = df["Run_Month"].min(), df["Run_Month"].max()
             st.session_state["run_month_range"] = (min_m.date(), max_m.date())
 
-    st.button("🧹 Clear all filters", on_click=clear_all_filters)
+    def clear_all_filters():
+        labels = [
+            "Application Status",
+            "Applicant Type",
+            "Primary Category",
+            "Secondary Category",
+            "Country",
+            "Seniority",
+        ]
+        for label in labels:
+            ms_key = _safe_key(label, "multi")
+            st.session_state[ms_key] = []  # clear selection
+
+        # Reset date to full span as well
+        if "Run_Month" in df.columns:
+            min_m, max_m = df["Run_Month"].min(), df["Run_Month"].max()
+            st.session_state["run_month_range"] = (min_m.date(), max_m.date())
+
+# Buttons at the top of the sidebar
+    c1, c2 = st.sidebar.columns([1, 1])
+    with c1:
+        st.button("✅ Select all filters", key="btn_select_all_filters", on_click=select_all_filters)
+    with c2:
+        st.button("🧹 Clear all filters",  key="btn_clear_all_filters",  on_click=clear_all_filters)
     
-    sel_status   = multiselect_with_select_all("Application Status", df["Application Status"])
-    sel_app_type = multiselect_with_select_all("Applicant Type", df["Applicant Type"])
-    sel_primcat  = multiselect_with_select_all("Primary Category", df["Primary Category"])
-    sel_secncat  = multiselect_with_select_all("Secondary Category", df["Secondary Category"])
-    sel_country  = multiselect_with_select_all("Country", df["Country Of Residence"])
-    sel_senior   = multiselect_with_select_all("Seniority", df["Seniority"])
+    sel_status   = multiselect_with_all_button("Application Status", df["Application Status"])
+    sel_app_type = multiselect_with_all_button("Applicant Type", df["Applicant Type"])
+    sel_primcat  = multiselect_with_all_button("Primary Category", df["Primary Category"])
+    sel_secncat  = multiselect_with_all_button("Secondary Category", df["Secondary Category"])
+    sel_country  = multiselect_with_all_button("Country", df["Country Of Residence"])
+    sel_senior   = multiselect_with_all_button("Seniority", df["Seniority"])
 
     top_k = st.number_input("Top K (for Top-X charts)", min_value=3, max_value=50, value=10, step=1)
 
