@@ -210,8 +210,8 @@ with st.sidebar:
     # Per-filter multiselects with "Select all" buttons
     sel_status   = multiselect_with_all_button("Application Status", df.get("Application Status", pd.Series([], dtype="object")))
     sel_app_type = multiselect_with_all_button("Applicant Type",     df.get("Applicant Type",     pd.Series([], dtype="object")))
-    sel_primcat  = multiselect_with_all_button("Primary Category",   df.get("Primary Category",   pd.Series([], dtype="object")))
-    sel_secncat  = multiselect_with_all_button("Secondary Category", df.get("Secondary Category", pd.Series([], dtype="object")))
+    sel_primcat  = multiselect_with_all_button("Pri Category",   df.get("Primary Category",   pd.Series([], dtype="object")))
+    sel_secncat  = multiselect_with_all_button("Sec Category", df.get("Secondary Category", pd.Series([], dtype="object")))
     sel_country  = multiselect_with_all_button("Country",            df.get("Country Of Residence", pd.Series([], dtype="object")))
     sel_senior   = multiselect_with_all_button("Seniority",          df.get("Seniority",          pd.Series([], dtype="object")))
 
