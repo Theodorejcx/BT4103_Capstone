@@ -74,45 +74,54 @@ with st.sidebar:
 
     # Core slicers
     def _safe_key(label: str, suffix: str) -> str:
-    # Make stable Streamlit keys (avoid spaces / collisions)
         return f"{label}_{suffix}".replace(" ", "_").lower()
 
     def multiselect_with_select_all(label, series: pd.Series, default_all=True):
         """
-        Multiselect with a 'Select all' checkbox that stays in sync
-        when options change (e.g., due to other filters like date range).
-        Missing values are mapped to 'Unknown'.
+        Multiselect with a 'Select all' checkbox that:
+        - Allows manual deselection even after selecting all
+        - Auto-unticks 'Select all' when selection != all options
+        - Initializes to 'all' (or empty) only once
         """
-        s = series.copy()
-        s = s.fillna("Unknown")
+        s = series.copy().fillna("Unknown")
         options = sorted(s.unique().tolist())
 
         ms_key  = _safe_key(label, "multi")
         all_key = _safe_key(label, "all")
 
-        # Checkbox for select all
-        select_all = st.checkbox(f"Select all {label}", value=default_all if ms_key not in st.session_state else (set(st.session_state.get(ms_key, [])) == set(options)), key=all_key)
-
-        # Initialize selection the first time
+        # 1) Initialize selection once
         if ms_key not in st.session_state:
-            st.session_state[ms_key] = options if select_all else []
+            st.session_state[ms_key] = options if default_all else []
 
-        # If 'Select all' is checked, force selection to all current options every rerun
-        if select_all:
+        # 2) Derive the checkbox's initial value from the current selection == all options
+        all_selected_now = set(st.session_state[ms_key]) == set(options)
+        select_all = st.checkbox(
+            f"Select all {label}",
+            value=all_selected_now,
+            key=all_key
+        )
+
+        # 3) If user ticks the checkbox and not all are currently selected, select all ONCE
+        if select_all and not all_selected_now:
             st.session_state[ms_key] = options
 
-        # Render multiselect with controlled default
-        selected = st.multiselect(label, options, default=st.session_state[ms_key], key=ms_key)
+        # 4) Render multiselect using the current (possibly updated) selection
+        selected = st.multiselect(
+            label,
+            options,
+            default=st.session_state[ms_key],
+            key=ms_key
+        )
 
-        # If user manually deselects while 'Select all' is on, turn it off to avoid confusion
-        if select_all and set(selected) != set(options):
-            st.session_state[all_key] = False
+        # 5) If 'Select all' is checked but user deselected something, auto-untick it
+        if st.session_state.get(all_key, False) and set(selected) != set(options):
+            st.session_state[all_key] = False  # this will reflect on next rerun
 
         return selected
 
     # --- Clear all filters button ---
     def clear_all_filters():
-        # Keys for your multiselects + their select-all checkboxes
+        # Keys for multiselects + their select-all checkboxes
         labels = [
             "Application Status",
             "Applicant Type",
