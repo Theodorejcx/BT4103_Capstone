@@ -54,32 +54,88 @@ with st.sidebar:
     # Time range by Run_Month
     if "Run_Month" in df.columns:
         min_m, max_m = df["Run_Month"].min(), df["Run_Month"].max()
-        default = (min_m, max_m)
-        date_range = st.date_input("Run month range", value=default, min_value=min_m.date(), max_value=max_m.date())
+        default_range = (min_m, max_m)
+
+        # Initialize default in session_state (so reset can restore it)
+        if "run_month_range" not in st.session_state:
+            st.session_state["run_month_range"] = (min_m.date(), max_m.date())
+
+        date_range = st.date_input(
+            "Run month range",
+            key="run_month_range",
+            value=st.session_state["run_month_range"],
+            min_value=min_m.date(),
+            max_value=max_m.date(),
+        )
+
         if isinstance(date_range, tuple) and len(date_range) == 2:
             start_d, end_d = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
             df = df[(df["Run_Month"] >= start_d) & (df["Run_Month"] <= end_d)]
 
     # Core slicers
+    def _safe_key(label: str, suffix: str) -> str:
+    # Make stable Streamlit keys (avoid spaces / collisions)
+        return f"{label}_{suffix}".replace(" ", "_").lower()
+
     def multiselect_with_select_all(label, series: pd.Series, default_all=True):
-        # Work on a copy to avoid modifying original df
+        """
+        Multiselect with a 'Select all' checkbox that stays in sync
+        when options change (e.g., due to other filters like date range).
+        Missing values are mapped to 'Unknown'.
+        """
         s = series.copy()
-
-        # Add 'Unknown' if there are NaNs
-        if s.isna().any():
-            s = s.fillna("Unknown")
-
+        s = s.fillna("Unknown")
         options = sorted(s.unique().tolist())
 
-        all_selected = st.checkbox(f"Select all {label}", value=default_all, key=f"{label}_all")
-        if all_selected:
-            selected = st.multiselect(label, options, default=options, key=f"{label}_multi")
-        else:
-            selected = st.multiselect(label, options, key=f"{label}_multi")
+        ms_key  = _safe_key(label, "multi")
+        all_key = _safe_key(label, "all")
+
+        # Checkbox for select all
+        select_all = st.checkbox(f"Select all {label}", value=default_all if ms_key not in st.session_state else (set(st.session_state.get(ms_key, [])) == set(options)), key=all_key)
+
+        # Initialize selection the first time
+        if ms_key not in st.session_state:
+            st.session_state[ms_key] = options if select_all else []
+
+        # If 'Select all' is checked, force selection to all current options every rerun
+        if select_all:
+            st.session_state[ms_key] = options
+
+        # Render multiselect with controlled default
+        selected = st.multiselect(label, options, default=st.session_state[ms_key], key=ms_key)
+
+        # If user manually deselects while 'Select all' is on, turn it off to avoid confusion
+        if select_all and set(selected) != set(options):
+            st.session_state[all_key] = False
 
         return selected
 
+    # --- Clear all filters button ---
+    def clear_all_filters():
+        # Keys for your multiselects + their select-all checkboxes
+        labels = [
+            "Application Status",
+            "Applicant Type",
+            "Primary Category",
+            "Secondary Category",
+            "Country",
+            "Seniority",
+        ]
+        for label in labels:
+            ms_key  = _safe_key(label, "multi")
+            all_key = _safe_key(label, "all")
+            if ms_key in st.session_state:
+                st.session_state[ms_key] = []          # deselect all
+            if all_key in st.session_state:
+                st.session_state[all_key] = False      # uncheck select-all
 
+        # Reset date range back to full span
+        if "Run_Month" in df.columns:
+            min_m, max_m = df["Run_Month"].min(), df["Run_Month"].max()
+            st.session_state["run_month_range"] = (min_m.date(), max_m.date())
+
+    st.button("🧹 Clear all filters", on_click=clear_all_filters)
+    
     sel_status   = multiselect_with_select_all("Application Status", df["Application Status"])
     sel_app_type = multiselect_with_select_all("Applicant Type", df["Applicant Type"])
     sel_primcat  = multiselect_with_select_all("Primary Category", df["Primary Category"])
@@ -91,16 +147,14 @@ with st.sidebar:
 
 # Apply sidebar filters
 def apply_filter(series: pd.Series, selected):
-    if selected is None or len(selected) == 0:
-        # No filter applied → keep all rows
+    if selected is None:
         return pd.Series(True, index=series.index)
 
-    # Convert NaN → "Unknown" to align with filter values
     s = series.fillna("Unknown")
-
-    # If user has selected *all available options*, skip filtering
-    all_opts = set(s.unique())
-    if set(selected) == all_opts:
+    # If user selected everything available right now, skip filtering
+    all_opts = set(s.unique().tolist())
+    sel_set  = set(selected)
+    if not selected or sel_set == all_opts:
         return pd.Series(True, index=series.index)
 
     return s.isin(selected)
