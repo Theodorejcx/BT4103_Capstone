@@ -1,3 +1,4 @@
+
 import os
 import pandas as pd
 import numpy as np
@@ -95,7 +96,7 @@ FILTER_LABELS = [
     "Applicant Type",
     "Primary Category",
     "Secondary Category",
-    "Country",
+    "Country of Residence",
     "Seniority",
 ]
 
@@ -384,3 +385,5 @@ with tab6:
         file_name="filtered_export.csv",
         mime="text/csv"
     )
+
+
