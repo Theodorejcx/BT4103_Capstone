@@ -1,4 +1,3 @@
-
 import os
 import pandas as pd
 import numpy as np
@@ -8,7 +7,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 st.set_page_config(page_title="EE Analytics Dashboard", layout="wide")
-
 
 # ------------------------------
 # Data loading & preparation
@@ -40,7 +38,7 @@ def load_data(path: str = "dashboard_curated.csv") -> pd.DataFrame:
     cat_cols = [
         "Application Status", "Applicant Type", "Primary Category",
         "Secondary Category", "Seniority", "Gender", "Country Of Residence",
-        "Truncated Programme Name"
+        "Truncated Programme Name", "Domain"
     ]
     for c in cat_cols:
         if c in df.columns:
@@ -100,6 +98,7 @@ FILTER_LABELS = [
     "Secondary Category",
     "Country of Residence",
     "Seniority",
+    "Domain"
 ]
 
 def multiselect_with_all_button(label: str, series: pd.Series, default_all: bool = True):
@@ -216,7 +215,8 @@ with st.sidebar:
     sel_secncat  = multiselect_with_all_button("Sec Category", df.get("Secondary Category", pd.Series([], dtype="object")))
     sel_country  = multiselect_with_all_button("Country",            df.get("Country Of Residence", pd.Series([], dtype="object")))
     sel_senior   = multiselect_with_all_button("Seniority",          df.get("Seniority",          pd.Series([], dtype="object")))
-
+    sel_domain   = multiselect_with_all_button("Domain",          df.get("Domain",          pd.Series([], dtype="object")))
+    
     top_k = st.number_input("Top K (for Top-X charts)", min_value=3, max_value=50, value=10, step=1)
 
 
@@ -229,8 +229,9 @@ mask = (
     apply_filter(df.get("Primary Category",          pd.Series(index=df.index)), sel_primcat)  &
     apply_filter(df.get("Secondary Category",        pd.Series(index=df.index)), sel_secncat)  &
     apply_filter(df.get("Country Of Residence",      pd.Series(index=df.index)), sel_country)  &
-    apply_filter(df.get("Seniority",                 pd.Series(index=df.index)), sel_senior)
-)
+    apply_filter(df.get("Seniority",                 pd.Series(index=df.index)), sel_senior)   &
+    apply_filter(df.get("Domain",                    pd.Series(index=df.index)), sel_domain)
+) 
 df_f = df[mask].copy()
 st.caption(f"Filtered rows: {len(df_f):,} of {len(df):,}")
 
@@ -343,7 +344,14 @@ with tab4:
         sen.columns = ["Seniority", "Participants"]
         fig3 = px.bar(sen, x="Seniority", y="Participants", title="Participants by Seniority")
         st.plotly_chart(fig3, use_container_width=True)
-
+        
+    if "Domain" in df_f.columns:
+        domain = df_f["Domain"].value_counts().reset_index()
+        domain.columns = ["Domain", "Participants"]
+        domain = domain[domain["Domain"] != "Unknown"]
+        fig4 = px.bar(domain, x="Domain", y="Participants", title="Participants by Job Title Domain")
+        st.plotly_chart(fig4, use_container_width=True)
+        
 # --- Tab 5: Age & Demographics
 with tab5:
     st.subheader("Demographics")
@@ -372,7 +380,7 @@ with tab6:
         "Organisation Name: Organisation Name", "Job Title Clean", "Seniority",
         "Truncated Programme Name", "Truncated Programme Run", "Primary Category", "Secondary Category",
         "Programme Start Date", "Programme End Date", "Run_Month", "Run_Month_Label", "Programme_Duration",
-        "Gender", "Age", "Country Of Residence"
+        "Gender", "Age", "Country Of Residence", "Domain"
     ] if c in df_f.columns]
 
     st.dataframe(
