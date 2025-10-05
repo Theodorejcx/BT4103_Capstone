@@ -90,44 +90,41 @@ def _safe_key(label: str, suffix: str) -> str:
     """Make safe, unique Streamlit widget keys from labels."""
     return f"{label}_{suffix}".replace(" ", "_").lower()
 
-# Filter labels used throughout
-FILTER_LABELS = [
-    "Application Status",
-    "Applicant Type",
-    "Primary Category",
-    "Secondary Category",
-    "Country of Residence",
-    "Seniority",
-    "Domain"
-]
+# ---- UI label ↔ column name mapping ----
+COL_MAP = {
+    "Pri Category": "Primary Category",
+    "Sec Category": "Secondary Category",
+    "Country": "Country Of Residence",
+    "Application Status": "Application Status",
+    "Applicant Type": "Applicant Type",
+    "Seniority": "Seniority",
+    "Domain": "Domain",
+}
+UI_FILTER_LABELS = ["Application Status", "Applicant Type", "Pri Category",
+                    "Sec Category", "Country", "Seniority", "Domain"]
 
-def multiselect_with_all_button(label: str, series: pd.Series, default_all: bool = True):
-    """
-    Multiselect with a single 'Select all' button (no per-filter clear).
-    - Persists selection in session_state
-    - Handles option changes safely (e.g., after date filter)
-    """
-    s = series.copy().fillna("Unknown")
+def _col_from_label(label: str) -> str:
+    return COL_MAP.get(label, label)  # fall back if label == col
+
+def multiselect_with_all_button(label: str, df_source: pd.DataFrame, default_all: bool = True):
+    """Multiselect that shows a short label but filters on the real dataframe column."""
+    col = _col_from_label(label)
+    s = df_source.get(col, pd.Series([], dtype="object")).copy().fillna("Unknown")
     options = sorted(s.unique().tolist())
 
     ms_key = _safe_key(label, "multi")
 
-    # Initialize once per filter
     if ms_key not in st.session_state:
         st.session_state[ms_key] = options[:] if default_all else []
 
-    # Keep selection only within current options (if options changed)
     current = [v for v in st.session_state[ms_key] if v in options]
     if current != st.session_state[ms_key]:
         st.session_state[ms_key] = current
 
-    # One button to select all current options
     if st.button(f"Select all {label}", key=_safe_key(label, "btn_all")):
-        st.session_state[ms_key] = options[:]  # Streamlit auto-reruns
+        st.session_state[ms_key] = options[:]
 
-    # Render multiselect bound to state (no default=)
     st.multiselect(label, options, key=ms_key)
-
     return st.session_state[ms_key]
 
 
@@ -171,19 +168,16 @@ with st.sidebar:
     st.header("Filters")
 
     def select_all_filters():
-        """Select all options for each filter and reset date to full span."""
-        for label in FILTER_LABELS:
+        for label in UI_FILTER_LABELS:
             ms_key = _safe_key(label, "multi")
-            # Use the current (date-filtered) df to decide options; change to df_full for absolute all
-            series = df[label].fillna("Unknown") if label in df.columns else pd.Series([], dtype="object")
+            col = _col_from_label(label)
+            series = df.get(col, pd.Series([], dtype="object")).fillna("Unknown")
             st.session_state[ms_key] = sorted(series.unique().tolist())
-        # Reset date to the stored full span
         if "run_month_full_span" in st.session_state:
             st.session_state["run_month_range"] = st.session_state["run_month_full_span"]
 
     def clear_all_filters():
-        """Clear selections for each filter and reset date to full span."""
-        for label in FILTER_LABELS:
+        for label in UI_FILTER_LABELS:
             ms_key = _safe_key(label, "multi")
             st.session_state[ms_key] = []
         if "run_month_full_span" in st.session_state:
@@ -209,14 +203,13 @@ with st.sidebar:
         df = df[(df["Run_Month"] >= start_d) & (df["Run_Month"] <= end_d)]
 
     # Per-filter multiselects with "Select all" buttons
-    sel_status   = multiselect_with_all_button("Application Status", df.get("Application Status", pd.Series([], dtype="object")))
-    sel_app_type = multiselect_with_all_button("Applicant Type",     df.get("Applicant Type",     pd.Series([], dtype="object")))
-    sel_primcat  = multiselect_with_all_button("Pri Category",   df.get("Primary Category",   pd.Series([], dtype="object")))
-    sel_secncat  = multiselect_with_all_button("Sec Category", df.get("Secondary Category", pd.Series([], dtype="object")))
-    sel_country  = multiselect_with_all_button("Country",            df.get("Country Of Residence", pd.Series([], dtype="object")))
-    sel_senior   = multiselect_with_all_button("Seniority",          df.get("Seniority",          pd.Series([], dtype="object")))
-    sel_domain   = multiselect_with_all_button("Domain",          df.get("Domain",          pd.Series([], dtype="object")))
-    
+    sel_status   = multiselect_with_all_button("Application Status", df)
+    sel_app_type = multiselect_with_all_button("Applicant Type", df)
+    sel_primcat  = multiselect_with_all_button("Pri Category", df)
+    sel_secncat  = multiselect_with_all_button("Sec Category", df)
+    sel_country  = multiselect_with_all_button("Country", df)
+    sel_senior   = multiselect_with_all_button("Seniority", df)
+    sel_domain   = multiselect_with_all_button("Domain", df)
     top_k = st.number_input("Top K (for Top-X charts)", min_value=3, max_value=50, value=10, step=1)
 
 
@@ -224,14 +217,14 @@ with st.sidebar:
 # Apply all filters to the working df
 # ------------------------------
 mask = (
-    apply_filter(df.get("Application Status",        pd.Series(index=df.index)), sel_status)   &
-    apply_filter(df.get("Applicant Type",            pd.Series(index=df.index)), sel_app_type) &
-    apply_filter(df.get("Primary Category",          pd.Series(index=df.index)), sel_primcat)  &
-    apply_filter(df.get("Secondary Category",        pd.Series(index=df.index)), sel_secncat)  &
-    apply_filter(df.get("Country Of Residence",      pd.Series(index=df.index)), sel_country)  &
-    apply_filter(df.get("Seniority",                 pd.Series(index=df.index)), sel_senior)   &
-    apply_filter(df.get("Domain",                    pd.Series(index=df.index)), sel_domain)
-) 
+    apply_filter(df.get(_col_from_label("Application Status"), pd.Series(index=df.index)), sel_status) &
+    apply_filter(df.get(_col_from_label("Applicant Type"),     pd.Series(index=df.index)), sel_app_type) &
+    apply_filter(df.get(_col_from_label("Pri Category"),       pd.Series(index=df.index)), sel_primcat) &
+    apply_filter(df.get(_col_from_label("Sec Category"),       pd.Series(index=df.index)), sel_secncat) &
+    apply_filter(df.get(_col_from_label("Country"),            pd.Series(index=df.index)), sel_country) &
+    apply_filter(df.get(_col_from_label("Seniority"),          pd.Series(index=df.index)), sel_senior) &
+    apply_filter(df.get(_col_from_label("Domain"),             pd.Series(index=df.index)), sel_domain)
+)
 df_f = df[mask].copy()
 st.caption(f"Filtered rows: {len(df_f):,} of {len(df):,}")
 
