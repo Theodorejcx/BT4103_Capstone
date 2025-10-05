@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 st.set_page_config(page_title="EE Analytics Dashboard", layout="wide")
 
@@ -236,9 +238,9 @@ st.caption(f"Filtered rows: {len(df_f):,} of {len(df):,}")
 # ------------------------------
 # Tabs & Visualizations
 # ------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📈 Time Series", "🗺️ Geography", "🏷️ Programmes × Country",
-    "👔 Titles & Orgs", "🧮 Age & Demographics", "ℹ️ Data Preview"
+    "👔 Titles & Orgs", "🧮 Age & Demographics", "ℹ️ Data Preview", "Age Distribution per Category", "Country Distribution per Category"
 ])
 
 # --- Tab 1: Time Series
@@ -387,3 +389,65 @@ with tab6:
     )
 
 
+# --- Tab 7: Test Tab
+with tab7:
+    st.header("Age Distribution per Category")
+
+    # Choose between Primary or Secondary Category
+    category_type = st.radio("Choose category type:", ["Primary Category", "Secondary Category"])
+
+    # Get available categories
+    if category_type in df_f.columns and "Age" in df_f.columns:
+        categories = df_f[category_type].dropna().unique()
+        selected_cat = st.selectbox(f"Select {category_type}:", categories)
+        bins = np.arange(10, 80, 5)  # bins: 0-5, 5-10, ..., 85-90
+
+        # Plot for selected category
+        fig, ax = plt.subplots(figsize=(4, 2.5))
+        sns.histplot(df_f[df_f[category_type] == selected_cat]["Age"], bins=bins, kde=True, ax=ax)
+        ax.set_title(f"Age Distribution - {category_type}: {selected_cat}")
+        ax.set_xlabel("Age")
+        ax.set_ylabel("Count")
+        ax.set_xlim(10, 80)
+        plt.tight_layout()
+        st.pyplot(fig)
+
+
+# --- Tab 8: Age & Country Dist. per Category
+with tab8:
+    st.header("Country Distribution per Category")
+
+    # Choose between Primary or Secondary Category
+    country_category_type = st.radio("Choose category type for country distribution:", ["Primary Category", "Secondary Category"], key="country_cat_type")
+
+    if country_category_type in df_f.columns and "Country Of Residence" in df_f.columns:
+        categories = df_f[country_category_type].dropna().unique()
+        selected_cat = st.selectbox(f"Select {country_category_type}:", categories, key="country_cat_select")
+
+        # Plot for selected category
+        subset = df_f[df_f[country_category_type] == selected_cat]
+        country_props = subset["Country Of Residence"].value_counts(normalize=True).astype(float)
+        major = country_props[country_props >= 0.01]
+        others_pct = 1 - major.sum()
+        if others_pct > 0:
+            major["Others"] = others_pct
+        plot_df = major.reset_index()
+        plot_df.columns = ["Country", "Percentage"]
+        plot_df["Percentage"] = plot_df["Percentage"] * 100
+        plot_df = plot_df.sort_values(by="Percentage", ascending=False)
+        if "Others" in plot_df["Country"].values:
+            others_row = plot_df[plot_df["Country"] == "Others"]
+            plot_df = plot_df[plot_df["Country"] != "Others"]
+            plot_df = pd.concat([plot_df, others_row], ignore_index=True)
+        fig, ax = plt.subplots(figsize=(4, 2.5))
+        sns.barplot(x="Country", y="Percentage", data=plot_df, hue="Country", dodge=False, order=plot_df["Country"], ax=ax, legend=False)
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+        ax.set_title(f"Country Distribution (%) - {country_category_type}: {selected_cat}")
+        ax.set_xlabel("Country")
+        ax.set_ylabel("Percentage")
+        ax.set_ylim(0, 100)
+        plt.tight_layout()
+        # for i, v in enumerate(plot_df["Percentage"]):
+        #     ax.text(i, v + 1, f"{v:.1f}%", ha='center', fontsize=8)
+        st.pyplot(fig)
+    
