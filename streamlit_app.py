@@ -232,9 +232,14 @@ st.caption(f"Filtered rows: {len(df_f):,} of {len(df):,}")
 # ------------------------------
 # Tabs & Visualizations
 # ------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "📈 Time Series", "🗺️ Geography", "🏷️ Programmes × Country",
-    "👔 Titles & Orgs", "🧮 Age & Demographics", "ℹ️ Data Preview", "Age Distribution per Category", "Country Distribution per Category"
+tab1, tab2, tab3, tab4, tab5, tab_cat, tab8 = st.tabs([
+    "📈 Time Series",
+    "🗺️ Geography",
+    "🏷️ Programmes × Country",
+    "👔 Titles & Orgs",
+    "🧮 Age & Demographics",
+    "🧭 Category Insights",   # <-- new combined tab
+    "ℹ️ Data Preview"
 ])
 
 # --- Tab 1: Time Series
@@ -365,8 +370,168 @@ with tab5:
         fig = px.pie(gender, names="Gender", values="Participants", title="Gender Split")
         st.plotly_chart(fig, use_container_width=True)
 
-# --- Tab 6: Data Preview
-with tab6:
+# --- Category Insights: nested tabs ---
+with tab_cat:
+    st.subheader("Category Insights")
+    sub_age, sub_country = st.tabs([
+        "📊 Age Distribution per Category",
+        "🌍 Country Distribution per Category"
+    ])
+
+    # -----------------------------
+    # Sub-tab A: Age Distribution
+    # -----------------------------
+    with sub_age:
+        st.markdown("##### Age Distribution per Category")
+        cat_type = st.radio(
+            "Choose category type:",
+            ["Primary Category", "Secondary Category"],
+            key="age_cat_type",
+            horizontal=True
+        )
+        cat_col = cat_type
+
+        if (cat_col in df_f.columns) and ("Age" in df_f.columns):
+            cat_values = (
+                df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist()
+            )
+            # Put 'Unknown' last for UX
+            cat_values = [v for v in sorted(cat_values) if v != "Unknown"] + (
+                ["Unknown"] if "Unknown" in cat_values else []
+            )
+
+            selected_cat = st.selectbox(f"Select {cat_type}:", cat_values, key="age_cat_select")
+
+            subset = df_f[df_f[cat_col].fillna("Unknown").astype(str) == selected_cat].copy()
+            if subset.empty:
+                st.info("No rows for this selection.")
+            else:
+                # Ensure Age_Group exists
+                if "Age_Group" not in subset.columns:
+                    age_num = pd.to_numeric(subset["Age"], errors="coerce")
+                    bins   = [0, 34, 44, 54, 64, 200]
+                    labels = ["<35", "35–44", "45–54", "55–64", "65+"]
+                    subset["Age_Group"] = pd.cut(age_num, bins=bins, labels=labels, right=True).astype("string")
+                    subset.loc[age_num.isna(), "Age_Group"] = "Unknown"
+
+                # Build % distribution
+                age_series = subset["Age_Group"].fillna("Unknown").astype(str).replace({"Unknown": "Not provided"})
+                dist = (age_series.value_counts(normalize=True) * 100.0).reset_index()
+                dist.columns = ["Age Group", "Percentage"]
+
+                include_unknown_age = st.checkbox(
+                    "Include Unknown ages",
+                    value=False,
+                    key="include_unknown_age"
+                )
+
+                if not include_unknown_age:
+                    dist = dist[dist["Age Group"] != "Not provided"].copy()
+                    total = float(dist["Percentage"].sum())
+                    if total > 0:
+                        dist["Percentage"] = dist["Percentage"] * (100.0 / total)
+
+                # Quality note
+                unknown_age_pct = float(subset["Age"].isna().mean() * 100.0)
+                st.caption(f"Data quality note: Unknown ages = {unknown_age_pct:.1f}% of rows for this selection.")
+
+                # Order buckets
+                order_full = ["<35", "35–44", "45–54", "55–64", "65+", "Not provided"]
+                order_used = [g for g in order_full if g in dist["Age Group"].values]
+                dist = dist.set_index("Age Group").reindex(order_used).reset_index()
+
+                # Plot
+                text_labels = dist["Percentage"].round(1).astype(str) + "%"
+                fig = px.bar(
+                    dist,
+                    x="Age Group",
+                    y="Percentage",
+                    title=f"Age Distribution (%) – {cat_type}: {selected_cat}",
+                    text=text_labels,
+                )
+                fig.update_traces(textposition="outside", cliponaxis=False)
+                ymax = min(100.0, float(dist["Percentage"].max()) + 10.0)
+                fig.update_layout(yaxis_range=[0, ymax])
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Required columns not found: ensure ‘Age’ and the selected category column exist.")
+
+    # ----------------------------------------
+    # Sub-tab B: Country Distribution
+    # ----------------------------------------
+    with sub_country:
+        st.markdown("##### Country Distribution per Category")
+
+        cat_type = st.radio(
+            "Choose category type:",
+            ["Primary Category", "Secondary Category"],
+            key="country_cat_type",
+            horizontal=True
+        )
+        cat_col = cat_type  
+
+        if (cat_col in df_f.columns) and ("Country Of Residence" in df_f.columns):
+            cat_values = (
+                df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist()
+            )
+            cat_values = [v for v in sorted(cat_values) if v != "Unknown"] + (
+                ["Unknown"] if "Unknown" in cat_values else []
+            )
+
+            selected_cat = st.selectbox(f"Select {cat_type}:", cat_values, key="country_cat_select")
+
+            subset = df_f[df_f[cat_col].fillna("Unknown").astype(str) == selected_cat].copy()
+            if subset.empty:
+                st.info("No rows for this selection.")
+            else:
+                country_series = subset["Country Of Residence"].fillna("Unknown").astype(str).replace({"": "Unknown"})
+                counts = country_series.value_counts()
+                total = counts.sum()
+                pct = (counts / total) * 100.0
+                cdf = pct.reset_index()
+                cdf.columns = ["Country", "Percentage"]
+                cdf = cdf.sort_values("Percentage", ascending=False)
+
+                top_df  = cdf.head(top_k).copy()
+                rest_df = cdf.iloc[top_k:]
+                others_pct = float(rest_df["Percentage"].sum()) if not rest_df.empty else 0.0
+
+                rows = [top_df]
+                if others_pct > 0:
+                    rows.append(pd.DataFrame([{"Country": "All other countries", "Percentage": others_pct}]))
+
+                cdf_final = pd.concat(rows, ignore_index=True) if rows else top_df
+
+                include_unknown = st.checkbox("Include Unknown countries", value=False, key="include_unknown_cty")
+
+                if not include_unknown:
+                    keep_mask = cdf_final["Country"] != "Unknown"
+                    cdf_final = cdf_final[keep_mask].copy()
+                    scale = float(cdf_final["Percentage"].sum())
+                    if scale > 0:
+                        cdf_final["Percentage"] = cdf_final["Percentage"] * (100.0 / scale)
+
+                unknown_pct = float((country_series == "Unknown").mean() * 100)
+                st.caption(f"Data quality note: Unknown countries = {unknown_pct:.1f}% of rows for this selection.")
+
+                text_labels = cdf_final["Percentage"].round(1).astype(str) + "%"
+                fig = px.bar(
+                    cdf_final,
+                    x="Country",
+                    y="Percentage",
+                    title=f"Country Distribution (%) – {cat_type}: {selected_cat}",
+                    text=text_labels,
+                )
+                fig.update_traces(textposition="outside", cliponaxis=False)
+                # Keep headroom for labels; clamp max to 100
+                ymax = min(100.0, float(cdf_final["Percentage"].max()) + 10.0)
+                fig.update_layout(yaxis_range=[0, ymax], xaxis_tickangle=-45)
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Required columns not found: make sure ‘Country Of Residence’ and category columns exist in the dataset.")
+
+# --- Tab 8: Data Preview
+with tab8:
     st.subheader("Filtered Data Preview")
     preview_cols = [c for c in [
         "Application ID", "Contact ID", "Application Status", "Applicant Type",
@@ -387,68 +552,4 @@ with tab6:
         data=df_f.to_csv(index=False).encode("utf-8-sig"),
         file_name="filtered_export.csv",
         mime="text/csv"
-    )
-
-
-# --- Tab 7: Test Tab
-with tab7:
-    st.header("Age Distribution per Category")
-
-    # Choose between Primary or Secondary Category
-    category_type = st.radio("Choose category type:", ["Primary Category", "Secondary Category"])
-
-    # Get available categories
-    if category_type in df_f.columns and "Age" in df_f.columns:
-        categories = df_f[category_type].dropna().unique()
-        selected_cat = st.selectbox(f"Select {category_type}:", categories)
-        bins = np.arange(10, 80, 5)  # bins: 0-5, 5-10, ..., 85-90
-
-        # Plot for selected category
-        fig, ax = plt.subplots(figsize=(4, 2.5))
-        sns.histplot(df_f[df_f[category_type] == selected_cat]["Age"], bins=bins, kde=True, ax=ax)
-        ax.set_title(f"Age Distribution - {category_type}: {selected_cat}")
-        ax.set_xlabel("Age")
-        ax.set_ylabel("Count")
-        ax.set_xlim(10, 80)
-        plt.tight_layout()
-        st.pyplot(fig)
-
-
-# --- Tab 8: Age & Country Dist. per Category
-with tab8:
-    st.header("Country Distribution per Category")
-
-    # Choose between Primary or Secondary Category
-    country_category_type = st.radio("Choose category type for country distribution:", ["Primary Category", "Secondary Category"], key="country_cat_type")
-
-    if country_category_type in df_f.columns and "Country Of Residence" in df_f.columns:
-        categories = df_f[country_category_type].dropna().unique()
-        selected_cat = st.selectbox(f"Select {country_category_type}:", categories, key="country_cat_select")
-
-        # Plot for selected category
-        subset = df_f[df_f[country_category_type] == selected_cat]
-        country_props = subset["Country Of Residence"].value_counts(normalize=True).astype(float)
-        major = country_props[country_props >= 0.01]
-        others_pct = 1 - major.sum()
-        if others_pct > 0:
-            major["Others"] = others_pct
-        plot_df = major.reset_index()
-        plot_df.columns = ["Country", "Percentage"]
-        plot_df["Percentage"] = plot_df["Percentage"] * 100
-        plot_df = plot_df.sort_values(by="Percentage", ascending=False)
-        if "Others" in plot_df["Country"].values:
-            others_row = plot_df[plot_df["Country"] == "Others"]
-            plot_df = plot_df[plot_df["Country"] != "Others"]
-            plot_df = pd.concat([plot_df, others_row], ignore_index=True)
-        fig, ax = plt.subplots(figsize=(4, 2.5))
-        sns.barplot(x="Country", y="Percentage", data=plot_df, hue="Country", dodge=False, order=plot_df["Country"], ax=ax, legend=False)
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
-        ax.set_title(f"Country Distribution (%) - {country_category_type}: {selected_cat}")
-        ax.set_xlabel("Country")
-        ax.set_ylabel("Percentage")
-        ax.set_ylim(0, 100)
-        plt.tight_layout()
-        # for i, v in enumerate(plot_df["Percentage"]):
-        #     ax.text(i, v + 1, f"{v:.1f}%", ha='center', fontsize=8)
-        st.pyplot(fig)
-    
+    )        
