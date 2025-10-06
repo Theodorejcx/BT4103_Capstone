@@ -232,14 +232,15 @@ st.caption(f"Filtered rows: {len(df_f):,} of {len(df):,}")
 # ------------------------------
 # Tabs & Visualizations
 # ------------------------------
-tab1, tab2, tab3, tab4, tab5, tab_cat, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab_cat, tab_prog, tab_data = st.tabs([
     "📈 Time Series",
     "🗺️ Geography",
     "🏷️ Programmes × Country",
     "👔 Titles & Orgs",
     "🧮 Age & Demographics",
-    "🧭 Category Insights",   # <-- new combined tab
-    "ℹ️ Data Preview"
+    "🧭 Category Insights",
+    "🎯 Programme Deep Dive",
+    "ℹ️ Data Preview",
 ])
 
 # --- Tab 1: Time Series
@@ -592,10 +593,144 @@ with tab_cat:
                 fig.update_layout(yaxis_range=[0, ymax], xaxis_tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Required columns not found: make sure ‘Country Of Residence’ and category columns exist in the dataset.")
+            st.info("Required columns not found: make sure ‘Country Of Residence’ and category columns exist in the dataset.")       
 
-# --- Tab 8: Data Preview
-with tab8:
+# ------------------------------
+# Tab 8: Programme Deep Dive
+# ------------------------------
+with tab_prog:
+    st.subheader("Programme Deep Dive")
+
+    prog_col = "Truncated Programme Name"
+    if prog_col not in df_f.columns:
+        st.info("Programme column not found in the filtered data.")
+        st.stop()
+
+    # Programme picker
+    progs = (
+        df_f[prog_col].dropna().astype(str).sort_values().unique().tolist()
+        if not df_f.empty else []
+    )
+    if not progs:
+        st.info("No programmes available under current filters.")
+        st.stop()
+
+    sel_prog = st.selectbox("Select a programme", progs, index=0, key="prog_dd_select")
+
+    # Subset for the selected programme
+    p = df_f[df_f[prog_col] == sel_prog].copy()
+    if p.empty:
+        st.info("No rows for this programme with current filters.")
+        st.stop()
+
+    # ---- KPIs
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Participants", f"{len(p):,}")
+    with c2:
+        st.metric("Unique Runs", int(p["Truncated Programme Run"].nunique()))    
+    with c3:
+        st.metric("Countries", int(p["Country Of Residence"].nunique()))
+    with c4:
+        st.metric("Median Age", f"{p['Age'].median():.0f}" if p["Age"].notna().any() else "—")
+    date_min = pd.to_datetime(p["Programme Start Date"]).min()
+    date_max = pd.to_datetime(p["Programme End Date"]).max()    
+    if pd.notna(date_min) and pd.notna(date_max):
+        st.caption(f"**Programme Date Range:** {date_min:%A, %d %B %Y} → {date_max:%A, %d %B %Y}")
+        st.divider()
+
+    # ---- Time series: participants by run month
+    if "Run_Month" in p.columns:
+        ts = p.groupby("Run_Month").size().reset_index(name="Participants").sort_values("Run_Month")
+        fig_ts = px.line(ts, x="Run_Month", y="Participants", markers=True,
+                 title="Participants over Time (by Run Month)")
+        fig_ts.update_layout(yaxis_title="Participants", xaxis_title="Run Month")
+        fig_ts.update_xaxes(tickformat="%b %Y")
+        fig_ts.update_traces(hovertemplate="Run Month=%{x|%b %Y}<br>Participants=%{y}<extra></extra>")
+        st.plotly_chart(fig_ts, use_container_width=True)
+
+    colL, colR = st.columns(2)
+
+    # ---- Left: Application Status distribution + Gender
+    with colL:
+        if "Application Status" in p.columns:
+            status = p["Application Status"].fillna("Unknown").value_counts().reset_index()
+            status.columns = ["Application Status", "Count"]
+            fig_stat = px.bar(status, x="Application Status", y="Count",
+                              title="Application Status Breakdown", text="Count")
+            fig_stat.update_traces(textposition="outside", cliponaxis=False)
+            fig_stat.update_layout(xaxis_tickangle=-30)
+            st.plotly_chart(fig_stat, use_container_width=True)
+
+        if "Gender" in p.columns:
+            gender = p["Gender"].fillna("Unknown").str.capitalize().value_counts().reset_index()
+            gender.columns = ["Gender", "Participants"]
+            fig_gender = px.pie(gender, names="Gender", values="Participants", title="Gender Split")
+            st.plotly_chart(fig_gender, use_container_width=True)
+
+    # ---- Right: Top countries + Top organisations
+    with colR:
+        if "Country Of Residence" in p.columns:
+            ctry = p["Country Of Residence"].fillna("Unknown").value_counts().reset_index()
+            ctry.columns = ["Country", "Participants"]
+            ctry_top = ctry.head(top_k)
+            fig_ctry = px.bar(ctry_top, x="Participants", y="Country", orientation="h",
+                              title=f"Top {top_k} Countries (Participants)")
+            st.plotly_chart(fig_ctry, use_container_width=True)
+
+        org_col = "Organisation Name: Organisation Name"
+        if org_col in p.columns:
+            orgs = p[org_col].fillna("Unknown").value_counts().reset_index()
+            orgs.columns = ["Organisation", "Participants"]
+            orgs_top = orgs.head(top_k)
+            fig_org = px.bar(orgs_top, x="Participants", y="Organisation", orientation="h",
+                             title=f"Top {top_k} Organisations (Participants)")
+            st.plotly_chart(fig_org, use_container_width=True)
+
+    # ---- Seniority + Age distribution
+    colA, colB = st.columns(2)
+    with colA:
+        if "Seniority" in p.columns:
+            sen = p["Seniority"].fillna("Unknown").value_counts().reset_index()
+            sen.columns = ["Seniority", "Participants"]
+            fig_sen = px.bar(sen, x="Seniority", y="Participants", title="Seniority Mix")
+            st.plotly_chart(fig_sen, use_container_width=True)
+
+    with colB:
+        # Build/ensure Age_Group (same logic as load_data)
+        if "Age" in p.columns:
+            age_num = pd.to_numeric(p["Age"], errors="coerce")
+            bins   = [0, 34, 44, 54, 64, 200]
+            labels = ["<35", "35–44", "45–54", "55–64", "65+"]
+            p["Age_Group"] = pd.cut(age_num, bins=bins, labels=labels, right=True).astype("string")
+            p.loc[age_num.isna(), "Age_Group"] = "Unknown"
+
+            agec = p["Age_Group"].value_counts().reindex(
+                ["<35","35–44","45–54","55–64","65+","Unknown"]
+            ).dropna().reset_index()
+            agec.columns = ["Age Group", "Participants"]
+            fig_age = px.bar(agec, x="Age Group", y="Participants", title="Age Group Distribution")
+            st.plotly_chart(fig_age, use_container_width=True)
+
+    # ---- Runs table (optional quick view)
+    st.markdown("##### Runs for this Programme")
+    run_cols = [c for c in ["Truncated Programme Run", "Programme Start Date", "Programme End Date", "Country Of Residence", "Application Status"] if c in p.columns]
+    st.dataframe(
+        p.sort_values(["Run_Month","Programme Start Date"]).loc[:, run_cols].head(500),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # ---- Export button for this programme
+    st.download_button(
+        f"Download '{sel_prog}' rows (CSV)",
+        data=p.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"{sel_prog[:40].replace(' ','_')}_export.csv",
+        mime="text/csv"
+    ) 
+
+# --- Tab 9: Data Preview
+with tab_data:
     st.subheader("Filtered Data Preview")
     preview_cols = [c for c in [
         "Application ID", "Contact ID", "Application Status", "Applicant Type",
@@ -616,4 +751,4 @@ with tab8:
         data=df_f.to_csv(index=False).encode("utf-8-sig"),
         file_name="filtered_export.csv",
         mime="text/csv"
-    )        
+    )     
