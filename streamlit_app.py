@@ -273,30 +273,94 @@ with tab1:
             figq = px.bar(q, x="Start_Quarter", y="Applications", title="Applications by Start Quarter")
             st.plotly_chart(figq, use_container_width=True)
 
-# --- Tab 2: Geography
+# --- Tab 2: Geography 
 with tab2:
     st.subheader("Geospatial: Participants by Country")
+
     if "Country Of Residence" in df_f.columns:
-        geo = df_f.groupby("Country Of Residence").size().reset_index(name="Participants")
-        if not geo.empty:
-            fig = px.choropleth(
-                geo, locations="Country Of Residence", locationmode="country names",
-                color="Participants", hover_name="Country Of Residence", color_continuous_scale="Viridis"
+        # Aggregate by country
+        geo = (
+            df_f.groupby("Country Of Residence")
+                .size()
+                .reset_index(name="Participants")
+        )
+
+        exclude_sg = st.checkbox("Exclude Singapore (reduce skew)", value=False, key="geo_exclude_sg")
+        geo_plot = geo[geo["Country Of Residence"] != "Singapore"] if exclude_sg else geo.copy()
+
+        if geo_plot.empty:
+            st.info("No data to display for current filters.")
+        else:
+            # ---- Bubble size: sqrt scale for visual stability
+            size = np.sqrt(geo_plot["Participants"].astype(float).clip(lower=0))
+            size = 10 + (size / size.max()) * 30 if size.max() > 0 else np.full_like(size, 10, dtype=float)
+            geo_plot["BubbleSize"] = size
+
+            # ---- Robust color scaling: cap at 95th percentile
+            color_values = geo_plot["Participants"].astype(float)
+            cmin = float(color_values.min())
+            cmax = float(np.quantile(color_values, 0.95))
+            if cmax <= cmin:
+                cmax = cmin + 1.0  # avoid zero range
+
+            # ---- Proportional-symbol map 
+            fig = px.scatter_geo(
+                geo_plot,
+                locations="Country Of Residence",
+                locationmode="country names",
+                size="BubbleSize",  # already scaled
+                color="Participants",
+                hover_name="Country Of Residence",
+                hover_data={"Participants": True, "BubbleSize": False},
+                color_continuous_scale="Viridis",
+                projection="natural earth",
             )
-            fig.update_layout(coloraxis_colorbar_title="Participants")
+            fig.update_traces(marker=dict(sizemode="area", line=dict(width=0.5, color="rgba(0,0,0,0.25)")))
+            fig.update_layout(
+                coloraxis_colorbar_title="Participants",
+                coloraxis_cmin=cmin,
+                coloraxis_cmax=cmax,
+                margin=dict(l=0, r=0, t=10, b=0),
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("**Top Countries over Time (adjustable K)**")
-        top_countries = geo.nlargest(top_k, "Participants")["Country Of Residence"].tolist()
-        ts_geo = (
-            df_f[df_f["Country Of Residence"].isin(top_countries)]
-            .groupby(["Run_Month", "Country Of Residence"]).size().reset_index(name="Participants")
-            .sort_values("Run_Month")
-        )
-        if not ts_geo.empty:
-            fig = px.line(ts_geo, x="Run_Month", y="Participants", color="Country Of Residence", markers=True)
-            fig.update_layout(yaxis_title="Participants", xaxis_title="Run Month")
-            st.plotly_chart(fig, use_container_width=True)
+    # ---- Pareto (Top-K) bar - uses global top_k ----
+    st.markdown("**Pareto of Countries (Top K)**")
+
+    if 'geo_plot' in locals():
+        k = int(top_k)
+        # Total participants in the shown set (respects exclude_sg)
+        total_cnt = float(geo_plot["Participants"].sum()) if not geo_plot.empty else 0.0
+
+        if total_cnt == 0:
+            st.info("No countries to display for the current filters.")
+        else:
+            top_countries = geo_plot.nlargest(k, "Participants").copy()
+            top_countries["Share_%"] = (top_countries["Participants"] / total_cnt) * 100.0
+
+            fig_bar = px.bar(
+                top_countries,
+                x="Country Of Residence",
+                y="Participants",
+                title=f"Top {k} Countries by Participants",
+                text=top_countries["Share_%"].round(1).astype(str) + "%",
+            )
+            fig_bar.update_traces(textposition="outside", cliponaxis=False)
+            fig_bar.update_layout(
+                xaxis_tickangle=-45,
+                yaxis_title="Participants",
+                xaxis_title="Country"
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Friendly caption about scope
+            sg_note = " (Singapore excluded)" if exclude_sg else ""
+            st.caption(
+                f"Total participants shown: {int(total_cnt):,}{sg_note}. "
+                f"Top {k} countries account for {top_countries['Share_%'].sum():.1f}% of the shown total."
+            )
+    else:
+        st.info("Internal error: geo_plot not found — ensure the map section defines 'geo_plot'.")
 
 # --- Tab 3: Programmes × Country
 with tab3:
