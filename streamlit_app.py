@@ -364,8 +364,26 @@ with tab2:
         st.info("Internal error: geo_plot not found — ensure the map section defines 'geo_plot'.")
 
 # --- Tab 3: Programmes × Country
+# with tab3:
+#     st.subheader("Top Programmes & Country Breakdown")
+#     prog_col = "Truncated Programme Name"
+#     if prog_col in df_f.columns and "Country Of Residence" in df_f.columns:
+#         top_progs = df_f[prog_col].value_counts().nlargest(top_k).index.tolist()
+#         df_top = df_f[df_f[prog_col].isin(top_progs)].copy()
+
+#         agg = df_top.groupby([prog_col, "Country Of Residence"]).size().reset_index(name="Participants")
+#         top_c_in_subset = agg.groupby("Country Of Residence")["Participants"].sum().nlargest(top_k).index.tolist()
+#         agg = agg[agg["Country Of Residence"].isin(top_c_in_subset)]
+
+#         fig = px.bar(
+#             agg, x=prog_col, y="Participants", color="Country Of Residence",
+#             title=f"Participants by Programme (Top {top_k}) and Country", barmode="stack"
+#         )
+#         fig.update_layout(xaxis_title="Programme (Anon)", yaxis_title="Participants")
+#         st.plotly_chart(fig, use_container_width=True)
+
 with tab3:
-    st.subheader("Top Programmes & Country Breakdown")
+    st.subheader("Top Programmes & Country Breakdown (Heatmap: % Participants)")
     prog_col = "Truncated Programme Name"
     if prog_col in df_f.columns and "Country Of Residence" in df_f.columns:
         top_progs = df_f[prog_col].value_counts().nlargest(top_k).index.tolist()
@@ -375,12 +393,52 @@ with tab3:
         top_c_in_subset = agg.groupby("Country Of Residence")["Participants"].sum().nlargest(top_k).index.tolist()
         agg = agg[agg["Country Of Residence"].isin(top_c_in_subset)]
 
-        fig = px.bar(
-            agg, x=prog_col, y="Participants", color="Country Of Residence",
-            title=f"Participants by Programme (Top {top_k}) and Country", barmode="stack"
+        # Pivot for heatmap
+        heatmap_data = agg.pivot(index=prog_col, columns="Country Of Residence", values="Participants").fillna(0)
+        total = heatmap_data.values.sum()
+        heatmap_pct = (heatmap_data / total * 100).round(2)  # percentage per cell
+
+        fig = px.imshow(
+            heatmap_pct,
+            labels=dict(x="Country Of Residence", y="Programme", color="Percentage (%)"),
+            x=heatmap_pct.columns,
+            y=heatmap_pct.index,
+            color_continuous_scale="Viridis",
+            aspect="auto",
+            title=f"Participants Heatmap (%): Programme × Country (Top {top_k})",
+            text_auto=True,  # Show percentage in each cell
         )
-        fig.update_layout(xaxis_title="Programme (Anon)", yaxis_title="Participants")
+        fig.update_layout(xaxis_title="Country Of Residence", yaxis_title="Programme (Anon)")
         st.plotly_chart(fig, use_container_width=True)
+
+    # --- Heatmap: Top k Countries × Primary Category ---
+    st.subheader(f"Distribution of Top {top_k} Countries Across Primary Categories")
+    if ("Primary Category" in df_f.columns) and ("Country Of Residence" in df_f.columns):
+        top_countries = df_f["Country Of Residence"].value_counts().nlargest(10).index.tolist()
+        df_top_cty = df_f[df_f["Country Of Residence"].isin(top_countries)].copy()
+        agg_cat = (
+            df_top_cty.groupby(["Country Of Residence", "Primary Category"])
+            .size()
+            .reset_index(name="Participants")
+        )
+        heatmap_cat = agg_cat.pivot(index="Country Of Residence", columns="Primary Category", values="Participants").fillna(0)
+        # Normalize each row by country total
+        heatmap_cat_pct = heatmap_cat.div(heatmap_cat.sum(axis=1), axis=0) * 100
+        heatmap_cat_pct = heatmap_cat_pct.round(2)
+        fig_cat = px.imshow(
+            heatmap_cat_pct,
+            labels=dict(x="Primary Category", y="Country Of Residence", color="Row %"),
+            x=heatmap_cat_pct.columns,
+            y=heatmap_cat_pct.index,
+            color_continuous_scale="Viridis",
+            aspect="auto",
+            title="For each country: % of participants in each Primary Category",
+            text_auto=True
+        )
+        fig_cat.update_layout(xaxis_title="Primary Category", yaxis_title="Country Of Residence")
+        st.plotly_chart(fig_cat, use_container_width=True)
+    else:
+        st.info("Required columns not found: ensure ‘Primary Category’ and ‘Country Of Residence’ exist in the dataset.")
 
 # --- Tab 4: Titles & Organisations
 with tab4:
