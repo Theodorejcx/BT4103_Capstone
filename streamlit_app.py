@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
+# Matplotlib and Seaborn are no longer used in this version but kept in case of other uses
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -12,7 +13,7 @@ st.set_page_config(page_title="EE Analytics Dashboard", layout="wide")
 # Data loading & preparation
 # ------------------------------
 @st.cache_data
-def load_data(path: str = "dashboard_curated.csv") -> pd.DataFrame:
+def load_data(path: str = "dashboard_curated_v2.csv") -> pd.DataFrame:
     """Load curated CSV and perform light, safe parsing for the app."""
     df = pd.read_csv(path)
 
@@ -28,8 +29,8 @@ def load_data(path: str = "dashboard_curated.csv") -> pd.DataFrame:
     # Derive Age_Group (with Unknown for NaNs)
     if "Age" in df.columns:
         age_num = pd.to_numeric(df["Age"], errors="coerce")
-        bins   = [0, 34, 44, 54, 64, 200]
-        labels = ["<35", "35–44", "45–54", "55–64", "65+"]
+        bins    = [0, 34, 44, 54, 64, 200]
+        labels  = ["<35", "35–44", "45–54", "55–64", "65+"]
         df["Age_Group"] = pd.cut(age_num, bins=bins, labels=labels, right=True)
         df["Age_Group"] = df["Age_Group"].astype("string")
         df.loc[age_num.isna(), "Age_Group"] = "Unknown"
@@ -70,7 +71,7 @@ def load_data(path: str = "dashboard_curated.csv") -> pd.DataFrame:
 
 # Allow user to upload a newer CSV (optional)
 uploaded = st.sidebar.file_uploader("Upload a curated CSV (optional)", type=["csv"])
-data_path = uploaded if uploaded is not None else "dashboard_curated.csv"
+data_path = uploaded if uploaded is not None else "dashboard_curated_v2.csv"
 
 # Load the full dataset once; df is a working copy for filters
 df_full = load_data(data_path)
@@ -232,13 +233,14 @@ st.caption(f"Filtered rows: {len(df_f):,} of {len(df):,}")
 # ------------------------------
 # Tabs & Visualizations
 # ------------------------------
-tab1, tab2, tab3, tab4, tab5, tab_cat, tab_prog, tab_data = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab_6, tab_7, tab_8, tab_9 = st.tabs([
     "📈 Time Series",
     "🗺️ Geography",
     "🏷️ Programmes × Country",
     "👔 Titles & Orgs",
     "🧮 Age & Demographics",
     "🧭 Category Insights",
+    "💰 Programme Cost", # <-- NEW TAB
     "🎯 Programme Deep Dive",
     "ℹ️ Data Preview",
 ])
@@ -364,24 +366,6 @@ with tab2:
         st.info("Internal error: geo_plot not found — ensure the map section defines 'geo_plot'.")
 
 # --- Tab 3: Programmes × Country
-# with tab3:
-#     st.subheader("Top Programmes & Country Breakdown")
-#     prog_col = "Truncated Programme Name"
-#     if prog_col in df_f.columns and "Country Of Residence" in df_f.columns:
-#         top_progs = df_f[prog_col].value_counts().nlargest(top_k).index.tolist()
-#         df_top = df_f[df_f[prog_col].isin(top_progs)].copy()
-
-#         agg = df_top.groupby([prog_col, "Country Of Residence"]).size().reset_index(name="Participants")
-#         top_c_in_subset = agg.groupby("Country Of Residence")["Participants"].sum().nlargest(top_k).index.tolist()
-#         agg = agg[agg["Country Of Residence"].isin(top_c_in_subset)]
-
-#         fig = px.bar(
-#             agg, x=prog_col, y="Participants", color="Country Of Residence",
-#             title=f"Participants by Programme (Top {top_k}) and Country", barmode="stack"
-#         )
-#         fig.update_layout(xaxis_title="Programme (Anon)", yaxis_title="Participants")
-#         st.plotly_chart(fig, use_container_width=True)
-
 with tab3:
     st.subheader("Top Programmes & Country Breakdown (Heatmap: % Participants)")
     prog_col = "Truncated Programme Name"
@@ -396,7 +380,10 @@ with tab3:
         # Pivot for heatmap
         heatmap_data = agg.pivot(index=prog_col, columns="Country Of Residence", values="Participants").fillna(0)
         total = heatmap_data.values.sum()
-        heatmap_pct = (heatmap_data / total * 100).round(2)  # percentage per cell
+        if total > 0:
+            heatmap_pct = (heatmap_data / total * 100).round(2)  # percentage per cell
+        else:
+            heatmap_pct = heatmap_data # Avoid division by zero
 
         fig = px.imshow(
             heatmap_pct,
@@ -443,13 +430,12 @@ with tab3:
 # --- Tab 4: Titles & Organisations
 with tab4:
     st.subheader("Top Job Titles & Organisations")
-    col1, col2 = st.columns(2)
 
     if "Job Title Clean" in df_f.columns:
         top_titles = df_f["Job Title Clean"].value_counts().nlargest(top_k).reset_index()
         top_titles.columns = ["Job Title", "Participants"]
         fig1 = px.bar(top_titles, x="Participants", y="Job Title", orientation="h",
-                      title=f"Top {top_k} Job Titles")
+                        title=f"Top {top_k} Job Titles")
         st.plotly_chart(fig1, use_container_width=True, theme="streamlit")
 
     org_col = "Organisation Name: Organisation Name"
@@ -457,7 +443,7 @@ with tab4:
         top_orgs = df_f[org_col].value_counts().nlargest(top_k).reset_index()
         top_orgs.columns = ["Organisation", "Participants"]
         fig2 = px.bar(top_orgs, x="Participants", y="Organisation", orientation="h",
-                      title=f"Top {top_k} Organisations")
+                        title=f"Top {top_k} Organisations")
         st.plotly_chart(fig2, use_container_width=True, theme="streamlit")
 
     if "Seniority" in df_f.columns:
@@ -476,7 +462,6 @@ with tab4:
 # --- Tab 5: Age & Demographics
 with tab5:
     st.subheader("Demographics")
-    c1, c2 = st.columns(2)
 
     if "Age_Group" in df_f.columns:
         agec = df_f["Age_Group"].value_counts().reindex(
@@ -493,8 +478,8 @@ with tab5:
         fig = px.pie(gender, names="Gender", values="Participants", title="Gender Split")
         st.plotly_chart(fig, use_container_width=True)
 
-# --- Category Insights: nested tabs ---
-with tab_cat:
+# --- Tab 6: Age & Demographics: nested tabs ---
+with tab_6:
     st.subheader("Category Insights")
     sub_age, sub_country = st.tabs([
         "📊 Age Distribution per Category",
@@ -532,7 +517,7 @@ with tab_cat:
                 # Ensure Age_Group exists
                 if "Age_Group" not in subset.columns:
                     age_num = pd.to_numeric(subset["Age"], errors="coerce")
-                    bins   = [0, 34, 44, 54, 64, 200]
+                    bins    = [0, 34, 44, 54, 64, 200]
                     labels = ["<35", "35–44", "45–54", "55–64", "65+"]
                     subset["Age_Group"] = pd.cut(age_num, bins=bins, labels=labels, right=True).astype("string")
                     subset.loc[age_num.isna(), "Age_Group"] = "Unknown"
@@ -653,10 +638,78 @@ with tab_cat:
         else:
             st.info("Required columns not found: make sure ‘Country Of Residence’ and category columns exist in the dataset.")       
 
-# ------------------------------
-# Tab 8: Programme Deep Dive
-# ------------------------------
-with tab_prog:
+# --- Tab 7: Programme Cost
+with tab_7:
+    st.subheader("Programme Cost Analysis")
+
+    # Check if required columns exist in the filtered dataframe
+    required_cols = ["Programme Cost", "Truncated Programme Name", "Run_Month"]
+    if not all(col in df_f.columns for col in required_cols):
+        st.warning("The required columns ('Programme Cost', 'Truncated Programme Name', 'Run_Month') are not available in the data.")
+    else:
+        # Create a working copy for this tab's analysis
+        df_cost = df_f.copy()
+        
+        # Ensure 'Programme Cost' is a numeric type, coercing errors will turn non-numbers into NaN
+        df_cost['Programme Cost'] = pd.to_numeric(df_cost['Programme Cost'], errors='coerce')
+        
+        # Drop rows where 'Programme Cost' could not be converted (is NaN)
+        df_cost.dropna(subset=['Programme Cost'], inplace=True)
+
+        if df_cost.empty:
+            st.info("No data with valid programme costs found for the current filters.")
+        else:
+            # --- 1) Scatter Plot: Enrolment vs. Cost ---
+            st.markdown("##### Enrolment Volume vs. Programme Cost")
+            
+            grouped = df_cost.groupby('Truncated Programme Name').agg(
+                enrolment_volume=('Truncated Programme Name', 'size'),
+                programme_cost=('Programme Cost', 'first') # 'first' is safe as we group by programme
+            ).reset_index()
+
+            fig_scatter = px.scatter(
+                grouped,
+                x='programme_cost',
+                y='enrolment_volume',
+                title='Enrolment Volume vs. Programme Cost',
+                labels={'programme_cost': 'Programme Cost ($)', 'enrolment_volume': 'Total Enrolments'},
+                hover_data=['Truncated Programme Name'] # Show programme name on hover
+            )
+            fig_scatter.update_traces(marker=dict(size=12, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')))
+            st.plotly_chart(fig_scatter, use_container_width=True)
+
+            st.divider()
+
+            # --- 2) Time Trend: Monthly Revenue ---
+            st.markdown("##### Monthly Revenue Trend")
+
+            # Group by run month and sum the programme cost
+            monthly_revenue = (
+                df_cost
+                .groupby(df_cost['Run_Month'].dt.to_period('M'))['Programme Cost']
+                .sum()
+                .reset_index()
+            )
+            monthly_revenue.rename(columns={'Programme Cost': 'Total_Revenue'}, inplace=True)
+            
+            # Convert the period back to a timestamp for Plotly
+            monthly_revenue['Run_Month'] = monthly_revenue['Run_Month'].dt.to_timestamp()
+            monthly_revenue = monthly_revenue.sort_values("Run_Month")
+
+            fig_trend = px.line(
+                monthly_revenue,
+                x='Run_Month',
+                y='Total_Revenue',
+                title='Monthly Revenue Trend',
+                labels={'Run_Month': 'Month', 'Total_Revenue': 'Total Revenue ($)'},
+                markers=True
+            )
+            fig_trend.update_layout(yaxis_title="Total Revenue ($)", xaxis_title="Month")
+            st.plotly_chart(fig_trend, use_container_width=True)
+
+
+# --- Tab 7: Programme Deep Dive
+with tab_8:
     st.subheader("Programme Deep Dive")
 
     prog_col = "Truncated Programme Name"
@@ -686,13 +739,13 @@ with tab_prog:
     with c1:
         st.metric("Participants", f"{len(p):,}")
     with c2:
-        st.metric("Unique Runs", int(p["Truncated Programme Run"].nunique()))    
+        st.metric("Unique Runs", int(p["Truncated Programme Run"].nunique()))   
     with c3:
         st.metric("Countries", int(p["Country Of Residence"].nunique()))
     with c4:
         st.metric("Median Age", f"{p['Age'].median():.0f}" if p["Age"].notna().any() else "—")
     date_min = pd.to_datetime(p["Programme Start Date"]).min()
-    date_max = pd.to_datetime(p["Programme End Date"]).max()    
+    date_max = pd.to_datetime(p["Programme End Date"]).max()   
     if pd.notna(date_min) and pd.notna(date_max):
         st.caption(f"**Programme Date Range:** {date_min:%A, %d %B %Y} → {date_max:%A, %d %B %Y}")
         st.divider()
@@ -701,7 +754,7 @@ with tab_prog:
     if "Run_Month" in p.columns:
         ts = p.groupby("Run_Month").size().reset_index(name="Participants").sort_values("Run_Month")
         fig_ts = px.line(ts, x="Run_Month", y="Participants", markers=True,
-                 title="Participants over Time (by Run Month)")
+                         title="Participants over Time (by Run Month)")
         fig_ts.update_layout(yaxis_title="Participants", xaxis_title="Run Month")
         fig_ts.update_xaxes(tickformat="%b %Y")
         fig_ts.update_traces(hovertemplate="Run Month=%{x|%b %Y}<br>Participants=%{y}<extra></extra>")
@@ -715,7 +768,7 @@ with tab_prog:
             status = p["Application Status"].fillna("Unknown").value_counts().reset_index()
             status.columns = ["Application Status", "Count"]
             fig_stat = px.bar(status, x="Application Status", y="Count",
-                              title="Application Status Breakdown", text="Count")
+                                title="Application Status Breakdown", text="Count")
             fig_stat.update_traces(textposition="outside", cliponaxis=False)
             fig_stat.update_layout(xaxis_tickangle=-30)
             st.plotly_chart(fig_stat, use_container_width=True)
@@ -733,7 +786,7 @@ with tab_prog:
             ctry.columns = ["Country", "Participants"]
             ctry_top = ctry.head(top_k)
             fig_ctry = px.bar(ctry_top, x="Participants", y="Country", orientation="h",
-                              title=f"Top {top_k} Countries (Participants)")
+                                title=f"Top {top_k} Countries (Participants)")
             st.plotly_chart(fig_ctry, use_container_width=True)
 
         org_col = "Organisation Name: Organisation Name"
@@ -742,7 +795,7 @@ with tab_prog:
             orgs.columns = ["Organisation", "Participants"]
             orgs_top = orgs.head(top_k)
             fig_org = px.bar(orgs_top, x="Participants", y="Organisation", orientation="h",
-                             title=f"Top {top_k} Organisations (Participants)")
+                                 title=f"Top {top_k} Organisations (Participants)")
             st.plotly_chart(fig_org, use_container_width=True)
 
     # ---- Seniority + Age distribution
@@ -758,7 +811,7 @@ with tab_prog:
         # Build/ensure Age_Group (same logic as load_data)
         if "Age" in p.columns:
             age_num = pd.to_numeric(p["Age"], errors="coerce")
-            bins   = [0, 34, 44, 54, 64, 200]
+            bins    = [0, 34, 44, 54, 64, 200]
             labels = ["<35", "35–44", "45–54", "55–64", "65+"]
             p["Age_Group"] = pd.cut(age_num, bins=bins, labels=labels, right=True).astype("string")
             p.loc[age_num.isna(), "Age_Group"] = "Unknown"
@@ -788,14 +841,14 @@ with tab_prog:
     ) 
 
 # --- Tab 9: Data Preview
-with tab_data:
+with tab_9:
     st.subheader("Filtered Data Preview")
     preview_cols = [c for c in [
         "Application ID", "Contact ID", "Application Status", "Applicant Type",
         "Organisation Name: Organisation Name", "Job Title Clean", "Seniority",
         "Truncated Programme Name", "Truncated Programme Run", "Primary Category", "Secondary Category",
-        "Programme Start Date", "Programme End Date", "Run_Month", "Run_Month_Label", "Programme_Duration",
-        "Gender", "Age", "Country Of Residence", "Domain"
+        "Programme Start Date", "Programme End Date", "Run_Month", "Run_Month_Label",
+        "Gender", "Age", "Country Of Residence", "Domain", "Programme Cost"  
     ] if c in df_f.columns]
 
     st.dataframe(
@@ -809,4 +862,4 @@ with tab_data:
         data=df_f.to_csv(index=False).encode("utf-8-sig"),
         file_name="filtered_export.csv",
         mime="text/csv"
-    )     
+    )
