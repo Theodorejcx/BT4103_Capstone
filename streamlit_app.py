@@ -114,6 +114,7 @@ def apply_filter(series: pd.Series, selected: list[str]) -> pd.Series:
     return s.isin(selected)
 
 # ---- Unknown/Missing helpers ----
+
 def coalesce_unknown(series: pd.Series) -> pd.Series:
     s = series.astype("string").str.strip()
     s_norm = s.str.lower()
@@ -140,6 +141,22 @@ def dq_caption(df_in: pd.DataFrame, column: str, label: str):
         f"Data quality for **{label}** — Unknown + Missing: **{unknown_combined}** ({pct(unknown_combined):.1f}%), "
         f"Valid: **{valid}** ({pct(valid):.1f}%)."
     )
+
+def dq_note_only(df_in: pd.DataFrame, column: str, label: str):
+    """Show a compact data-quality note (Unknown + Missing merged) with NO checkbox."""
+    if column not in df_in.columns:
+        return
+    s = df_in[column]
+    s_norm = s.astype("string").str.strip().str.lower()
+    mask_unknown_or_missing = s.isna() | s_norm.isin(UNKNOWN_LIKE)
+    total = len(df_in)
+    unknown_combined = int(mask_unknown_or_missing.sum())
+    valid = int(total - unknown_combined)
+    pct = lambda n: (n / total * 100.0) if total > 0 else 0.0
+    st.caption(
+        f"Data quality for **{label}** — Unknown + Missing: **{unknown_combined}** ({pct(unknown_combined):.1f}%), "
+        f"Valid: **{valid}** ({pct(valid):.1f}%)."
+    )    
 
 def add_unknown_checkbox_and_note(
     df_in: pd.DataFrame,
@@ -321,26 +338,29 @@ with tab1:
             figq = px.bar(q, x="Start_Quarter", y="Applications", title="Applications by Start Quarter")
             plotly_show(figq, prefix="tab1_by_start_quarter")
 
-# --- Tab 2: Geography
+# --- Tab 2: Geography 
 with tab2:
     st.subheader("Geospatial: Participants by Country")
 
     country_col = "Country Of Residence"
     if country_col in df_f.columns:
-        # One Unknown+Missing checkbox + compact DQ note (applies to both visuals)
-        df_geo = add_unknown_checkbox_and_note(df_f, country_col, label="Country", key="geo_country", note_style="caption")
+        # DQ note only (no checkbox)
+        dq_note_only(df_f, country_col, "Country")
 
-        # One 'Exclude Singapore' checkbox (applies to both visuals)
-        exclude_sg = st.checkbox("Exclude Singapore (reduce skew)", value=False, key="geo_exclude_sg")
+        # Exclude Singapore toggle
+        exclude_sg = st.checkbox(
+            "Exclude Singapore (reduce skew)", value=False, key="geo_exclude_sg"
+        )
 
-        # Base df after the two controls
-        df_geo_base = df_geo[df_geo[country_col] != "Singapore"].copy() if exclude_sg else df_geo.copy()
+        base = df_f.copy()
+        if exclude_sg:
+            base = base[base[country_col] != "Singapore"].copy()
 
-        # ---- Map view (valid country names only)
-        s_geo = df_geo_base[country_col].astype("string").str.strip()
-        s_norm = s_geo.str.lower()
-        mask_u = s_geo.isna() | (s_geo == "") | s_norm.isin(UNKNOWN_LIKE)
-        df_map = df_geo_base.loc[~mask_u].copy()
+        # --- Map: must exclude Unknown/Missing (invalid country names)
+        s = base[country_col].astype("string").str.strip()
+        s_norm = s.str.lower()
+        mask_unknown = s.isna() | (s == "") | s_norm.isin(UNKNOWN_LIKE)
+        df_map = base.loc[~mask_unknown].copy()
 
         if df_map.empty:
             st.info("No data to display for current filters.")
@@ -368,77 +388,78 @@ with tab2:
                 projection="natural earth",
             )
             fig.update_traces(marker=dict(sizemode="area", line=dict(width=0.5, color="rgba(0,0,0,0.25)")))
-            fig.update_layout(coloraxis_colorbar_title="Participants", coloraxis_cmin=cmin, coloraxis_cmax=cmax, margin=dict(l=0, r=0, t=10, b=0))
+            fig.update_layout(
+                coloraxis_colorbar_title="Participants",
+                coloraxis_cmin=cmin,
+                coloraxis_cmax=cmax,
+                margin=dict(l=0, r=0, t=10, b=0),
+            )
             plotly_show(fig, prefix="tab2_geo_map")
 
-        # ---- Pareto (Top K) bar — merged "Unknown" if included
+        # --- Pareto bar: include merged "Unknown" bucket
         st.markdown("**Pareto of Countries (Top K)**")
-        if df_geo_base.empty:
+        if base.empty:
             st.info("No countries to display for the current filters.")
         else:
-            # If Unknowns were included upstream, coalesce to literal "Unknown" so counts keep it
-            s = df_geo_base[country_col]
-            if df_geo is df_f:
-                # shouldn't happen, but be safe
-                s = coalesce_unknown(s)
-            else:
-                # Unknown rows exist only if the checkbox was ticked; coalesce so value_counts keeps them
-                s = coalesce_unknown(s)
+            s_all = coalesce_unknown(base[country_col])  # merges Unknown + Missing -> "Unknown"
+            geo_counts = s_all.value_counts(dropna=False).reset_index()
+            geo_counts.columns = [country_col, "Participants"]
 
-            df_pareto = df_geo_base.copy()
-            df_pareto[country_col] = s
+            # Always include 'Unknown' if present, plus top_k non-Unknown
+            unknown_row = geo_counts[geo_counts[country_col] == "Unknown"]
+            top_non_unknown = geo_counts[geo_counts[country_col] != "Unknown"].nlargest(int(top_k), "Participants")
+            geo_counts_final = pd.concat([top_non_unknown, unknown_row]).drop_duplicates(subset=[country_col])
 
-            geo_counts = df_pareto.groupby(country_col).size().reset_index(name="Participants")
-            if geo_counts.empty:
-                st.info("No countries to display for the current filters.")
-            else:
-                total_cnt = float(geo_counts["Participants"].sum())
-                k = int(top_k)
+            total_cnt = float(geo_counts["Participants"].sum()) if not geo_counts.empty else 0.0
 
-                unknown_row = geo_counts[geo_counts[country_col] == "Unknown"]
-                non_unknown = geo_counts[geo_counts[country_col] != "Unknown"]
+            top_countries = geo_counts_final.nlargest(int(top_k), "Participants").copy()
+            top_countries["Share_%"] = (top_countries["Participants"] / total_cnt * 100.0) if total_cnt > 0 else 0.0
 
-                # Choose Top-K from real countries; splice Unknown (if present)
-                top_non_unknown = non_unknown.nlargest(k, "Participants").copy()
-                top_display = pd.concat([top_non_unknown, unknown_row], ignore_index=True).drop_duplicates(subset=[country_col])
+            fig_bar = px.bar(
+                top_countries,
+                x=country_col,
+                y="Participants",
+                title=f"Top {int(top_k)} Countries by Participants",
+                text=top_countries["Share_%"].round(1).astype(str) + "%",
+            )
+            fig_bar.update_traces(textposition="outside", cliponaxis=False)
+            fig_bar.update_layout(xaxis_tickangle=-45, yaxis_title="Participants", xaxis_title="Country")
+            plotly_show(fig_bar, prefix="tab2_geo_pareto")
 
-                # Order bars by size; keep Unknown last if present
-                order = top_display.sort_values("Participants", ascending=False)[country_col].tolist()
-                if "Unknown" in order:
-                    order = [c for c in order if c != "Unknown"] + ["Unknown"]
-                    top_display[country_col] = pd.Categorical(top_display[country_col], categories=order, ordered=True)
-                    top_display = top_display.sort_values(country_col)
-
-                top_display["Share_%"] = (top_display["Participants"] / total_cnt * 100.0) if total_cnt > 0 else 0.0
-
-                fig_bar = px.bar(
-                    top_display,
-                    x=country_col,
-                    y="Participants",
-                    title=f"Top {k} Countries by Participants",
-                    text=top_display["Share_%"].round(1).astype(str) + "%",
-                )
-                fig_bar.update_traces(textposition="outside", cliponaxis=False)
-                fig_bar.update_layout(xaxis_tickangle=-45, yaxis_title="Participants", xaxis_title="Country")
-                plotly_show(fig_bar, prefix="tab2_geo_pareto")
-
-                # Caption: total (with SG note) + % from Top-K *non-Unknown*
-                top_non_unknown_share = (top_non_unknown["Participants"].sum() / total_cnt * 100.0) if total_cnt > 0 else 0.0
-                sg_note = " (Singapore excluded)" if exclude_sg else ""
-                st.caption(
-                    f"Total participants shown: {int(total_cnt):,}{sg_note}. "
-                    f"Top {k} countries account for {top_non_unknown_share:.1f}% of the shown total."
-                )
+            sg_note = " (Singapore excluded)" if exclude_sg else ""
+            st.caption(
+                f"Total participants shown: {int(total_cnt):,}{sg_note}. "
+                f"Top {int(top_k)} countries account for {top_countries['Share_%'].sum():.1f}% of the shown total."
+            )
 
 # --- Tab 3: Programmes × Country
 with tab3:
     st.subheader("Top Programmes & Country Breakdown (Heatmap: % Participants)")
+
     prog_col = "Truncated Programme Name"
     country_col = "Country Of Residence"
+
     if (prog_col in df_f.columns) and (country_col in df_f.columns):
-        df_pc = add_unknown_checkbox_and_note(df_f, country_col, label="Country (Heatmap)", key="pc_country", note_style="caption")
-        top_progs = df_pc[prog_col].value_counts().nlargest(top_k).index.tolist()
-        df_top = df_pc[df_pc[prog_col].isin(top_progs)].copy()
+        # DQ note only (no checkbox)
+        dq_note_only(df_f, country_col, "Country (Heatmap)")
+
+        # Exclude Singapore toggle (applies to both heatmaps)
+        exclude_sg_tab3 = st.checkbox(
+            "Exclude Singapore (reduce skew)", value=False, key="pc_exclude_sg"
+        )
+
+        base = df_f.copy()
+        if exclude_sg_tab3:
+            base = base[base[country_col] != "Singapore"].copy()
+
+        # --- Heatmap 1: Programme × Country (overall %), Unknown EXCLUDED for interpretability
+        s = base[country_col].astype("string").str.strip()
+        s_norm = s.str.lower()
+        mask_unknown = s.isna() | (s == "") | s_norm.isin(UNKNOWN_LIKE)
+        base_hm1 = base.loc[~mask_unknown].copy()
+
+        top_progs = base_hm1[prog_col].value_counts().nlargest(top_k).index.tolist()
+        df_top = base_hm1[base_hm1[prog_col].isin(top_progs)].copy()
 
         agg = df_top.groupby([prog_col, country_col]).size().reset_index(name="Participants")
         top_c_in_subset = agg.groupby(country_col)["Participants"].sum().nlargest(top_k).index.tolist()
@@ -452,30 +473,37 @@ with tab3:
             heatmap_pct,
             labels=dict(x="Country Of Residence", y="Programme", color="Percentage (%)"),
             x=heatmap_pct.columns, y=heatmap_pct.index,
-            color_continuous_scale="Viridis",
-            aspect="auto",
+            color_continuous_scale="Viridis", aspect="auto",
             title=f"Participants Heatmap (%): Programme × Country (Top {top_k})",
             text_auto=True,
         )
         fig.update_layout(xaxis_title="Country Of Residence", yaxis_title="Programme (Anon)")
         plotly_show(fig, prefix="tab3_prog_country_heatmap")
 
+    # --- Heatmap 2: Top Countries × Primary Category (row %), Unknown ALWAYS excluded
     st.subheader(f"Distribution of Top {top_k} Countries Across Primary Categories")
     if ("Primary Category" in df_f.columns) and (country_col in df_f.columns):
-        df_cat = add_unknown_checkbox_and_note(df_f, country_col, label="Country (by Category)", key="pc_country_cat", note_style="caption")
-        top_countries = df_cat[country_col].value_counts().nlargest(10).index.tolist()
-        df_top_cty = df_cat[df_cat[country_col].isin(top_countries)].copy()
+        df_cat_clean = filter_unknown_no_ui(df_f, country_col, include_unknown=False)
+        if exclude_sg_tab3:
+            df_cat_clean = df_cat_clean[df_cat_clean[country_col] != "Singapore"].copy()
+
+        dq_note_only(df_f, country_col, "Country (by Category)")
+        st.caption("Analysis below **excludes** Unknown + Missing for Country.")
+
+        top_countries = df_cat_clean[country_col].value_counts().nlargest(top_k).index.tolist()
+        df_top_cty = df_cat_clean[df_cat_clean[country_col].isin(top_countries)].copy()
+
         agg_cat = df_top_cty.groupby([country_col, "Primary Category"]).size().reset_index(name="Participants")
         heatmap_cat = agg_cat.pivot(index=country_col, columns="Primary Category", values="Participants").fillna(0)
         heatmap_cat_pct = (heatmap_cat.div(heatmap_cat.sum(axis=1), axis=0) * 100).round(2)
+
         fig_cat = px.imshow(
             heatmap_cat_pct,
             labels=dict(x="Primary Category", y="Country Of Residence", color="Row %"),
             x=heatmap_cat_pct.columns, y=heatmap_cat_pct.index,
-            color_continuous_scale="Viridis",
-            aspect="auto",
-            title="For each country: % of participants in each Primary Category",
-            text_auto=True
+            color_continuous_scale="Viridis", aspect="auto",
+            title="For each country: % of participants in each Primary Category (Unknown excluded)",
+            text_auto=True,
         )
         fig_cat.update_layout(xaxis_title="Primary Category", yaxis_title="Country Of Residence")
         plotly_show(fig_cat, prefix="tab3_country_primarycat_heatmap")
@@ -487,11 +515,32 @@ with tab4:
     st.subheader("Top Job Titles & Organisations")
 
     if "Job Title Clean" in df_f.columns:
-        top_titles = df_f["Job Title Clean"].value_counts().nlargest(top_k).reset_index()
+        df_title = add_unknown_checkbox_and_note(
+            df_f, "Job Title Clean", label="Job Title", key="job_title_tab4", note_style="caption"
+        )
+
+        # When Unknowns are included, coalesce blank/variants into literal "Unknown"
+        s_titles = df_title["Job Title Clean"]
+        if "Unknown" in df_title["Job Title Clean"].astype("string").str.lower().unique() or df_title["Job Title Clean"].isna().any():
+            s_titles = coalesce_unknown(s_titles)
+
+        top_titles = (
+            s_titles.value_counts(dropna=False)
+            .head(top_k)
+            .reset_index()
+        )
         top_titles.columns = ["Job Title", "Participants"]
-        st.caption("Data quality for Job Title not shown (free-form text); charts use raw counts.")
-        fig1 = px.bar(top_titles, x="Participants", y="Job Title", orientation="h", title=f"Top {top_k} Job Titles")
-        plotly_show(fig1, prefix="tab4_top_titles", theme="streamlit")
+
+        safe_plot(
+            top_titles,
+            lambda: plotly_show(
+                px.bar(
+                    top_titles, x="Participants", y="Job Title",
+                    orientation="h", title=f"Top {top_k} Job Titles"
+                ),
+                prefix="tab4_top_titles"
+            )
+        )
 
     org_col = "Organisation Name: Organisation Name"
     if org_col in df_f.columns:
@@ -505,18 +554,7 @@ with tab4:
         sen = df_sen["Seniority"].value_counts().reset_index()
         sen.columns = ["Seniority", "Participants"]
         safe_plot(sen, lambda: plotly_show(px.bar(sen, x="Seniority", y="Participants", title="Participants by Seniority"), prefix="tab4_seniority"))
-
-    if "Domain" in df_f.columns:
-        df_dom = add_unknown_checkbox_and_note(df_f, "Domain", key="domain_tab4", note_style="caption")
-        domain = df_dom["Domain"].value_counts().reset_index()
-        domain.columns = ["Domain", "Participants"]
-        safe_plot(domain, lambda: plotly_show(px.bar(domain, x="Domain", y="Participants", title="Participants by Job Title Domain"), prefix="tab4_domain"))
-
-    if "Gender" in df_f.columns:
-        df_gender = add_unknown_checkbox_and_note(df_f, "Gender", key="gender_tab4", note_style="caption")
-        gender = df_gender["Gender"].value_counts().reset_index()
-        gender.columns = ["Gender", "Participants"]
-        safe_plot(gender, lambda: plotly_show(px.pie(gender, names="Gender", values="Participants", title="Gender Split"), prefix="tab4_gender_pie"))
+    
 
 # --- Tab 5: Age & Demographics
 with tab5:
@@ -542,41 +580,87 @@ with tab_6:
 
     with sub_age:
         st.markdown("##### Age Distribution per Category")
-        cat_type = st.radio("Choose category type:", ["Primary Category", "Secondary Category"], key="age_cat_type", horizontal=True)
+        cat_type = st.radio(
+            "Choose category type:",
+            ["Primary Category", "Secondary Category"],
+            key="age_cat_type",
+            horizontal=True
+        )
         cat_col = cat_type
 
         if (cat_col in df_f.columns) and ("Age_Group" in df_f.columns):
-            cat_values = (df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist())
-            cat_values = [v for v in sorted(cat_values) if v != "Unknown"] + (["Unknown"] if "Unknown" in cat_values else [])
+            cat_values = (
+                df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist()
+            )
+            # Put Unknown last
+            cat_values = [v for v in sorted(cat_values) if v != "Unknown"] + (
+                ["Unknown"] if "Unknown" in cat_values else []
+            )
             selected_cat = st.selectbox(f"Select {cat_type}:", cat_values, key="age_cat_select")
 
             subset = df_f[df_f[cat_col].fillna("Unknown").astype(str) == selected_cat].copy()
             if subset.empty:
                 st.info("No rows for this selection.")
             else:
-                sub_age_df = add_unknown_checkbox_and_note(subset, "Age_Group", label="Age Group (this selection)", key="age_dist_sub", note_style="caption")
-                dist = (sub_age_df["Age_Group"].value_counts(normalize=True) * 100.0).reset_index()
-                dist.columns = ["Age Group", "Percentage"]
-                order_full = ["<35", "35–44", "45–54", "55–64", "65+", "Unknown"]
-                dist = dist.set_index("Age Group").reindex(order_full).dropna().reset_index()
+                # Checkbox + DQ note for Age Group in this selection
+                sub_age_df = add_unknown_checkbox_and_note(
+                    subset, "Age_Group", label="Age Group (this selection)",
+                    key="age_dist_sub", note_style="caption"
+                )
 
-                text_labels = dist["Percentage"].round(1).astype(str) + "%"
-                fig = px.bar(dist, x="Age Group", y="Percentage", title=f"Age Distribution (%) – {cat_type}: {selected_cat}", text=text_labels)
-                fig.update_traces(textposition="outside", cliponaxis=False)
-                ymax = min(100.0, float(dist["Percentage"].max()) + 10.0) if not dist.empty else 100.0
-                fig.update_layout(yaxis_range=[0, ymax])
-                plotly_show(fig, prefix="tab6_age_dist_by_cat")
+                # Coalesce Unknown-like + Missing -> "Unknown" BEFORE counting
+                s = coalesce_unknown(sub_age_df["Age_Group"])
+
+                # Build % distribution
+                dist = (s.value_counts(normalize=True, dropna=False) * 100.0).reset_index()
+                dist.columns = ["Age Group", "Percentage"]
+
+                # Order buckets; keep Unknown last when present
+                order_full = ["<35", "35–44", "45–54", "55–64", "65+", "Unknown"]
+                # Only keep groups that exist after filtering
+                present = [g for g in order_full if g in dist["Age Group"].values]
+                dist = dist.set_index("Age Group").reindex(present).reset_index()
+
+                # Guard against empty after filtering
+                if dist.empty:
+                    st.info("No Age Group data to display for this selection.")
+                else:
+                    text_labels = dist["Percentage"].round(1).astype(str) + "%"
+                    fig = px.bar(
+                        dist,
+                        x="Age Group",
+                        y="Percentage",
+                        title=f"Age Distribution (%) – {cat_type}: {selected_cat}",
+                        text=text_labels,
+                    )
+                    fig.update_traces(textposition="outside", cliponaxis=False)
+                    ymax = min(100.0, float(dist["Percentage"].max()) + 10.0)
+                    fig.update_layout(yaxis_range=[0, ymax])
+                    plotly_show(fig, prefix="tab6_age_dist_by_cat")
         else:
             st.info("Required columns not found: ensure ‘Age_Group’ and the selected category column exist.")
 
     with sub_country:
         st.markdown("##### Country Distribution per Category")
-        cat_type = st.radio("Choose category type:", ["Primary Category", "Secondary Category"], key="country_cat_type", horizontal=True)
+
+        cat_type = st.radio(
+            "Choose category type:",
+            ["Primary Category", "Secondary Category"],
+            key="country_cat_type",
+            horizontal=True
+        )
         cat_col = cat_type
         country_col = "Country Of Residence"
 
+        # Keep Exclude SG toggle (applies to this sub-tab)
+        exclude_sg_tab6 = st.checkbox(
+            "Exclude Singapore (reduce skew)", value=False, key="tab6_exclude_sg"
+        )
+
         if (cat_col in df_f.columns) and (country_col in df_f.columns):
-            cat_values = (df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist())
+            cat_values = (
+                df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist()
+            )
             cat_values = [v for v in sorted(cat_values) if v != "Unknown"] + (["Unknown"] if "Unknown" in cat_values else [])
             selected_cat = st.selectbox(f"Select {cat_type}:", cat_values, key="country_cat_select")
 
@@ -584,26 +668,47 @@ with tab_6:
             if subset.empty:
                 st.info("No rows for this selection.")
             else:
-                sub_cty_df = add_unknown_checkbox_and_note(subset, country_col, label="Country (this selection)", key="cty_dist_sub", note_style="caption")
-                counts = sub_cty_df[country_col].value_counts()
-                total = counts.sum()
-                pct = (counts / total) * 100.0 if total > 0 else counts
-                cdf = pct.reset_index()
+                # DQ note only (no checkbox)
+                dq_note_only(subset, country_col, "Country (this selection)")
+
+                # Apply Exclude-SG if toggled
+                if exclude_sg_tab6:
+                    subset = subset[subset[country_col] != "Singapore"].copy()
+
+                # Include merged 'Unknown' bucket in distribution
+                s = coalesce_unknown(subset[country_col])
+
+                counts = s.value_counts(dropna=False)
+                total  = counts.sum()
+                pct    = (counts / total) * 100.0 if total > 0 else counts
+                cdf    = pct.reset_index()
                 cdf.columns = ["Country", "Percentage"]
                 cdf = cdf.sort_values("Percentage", ascending=False)
 
-                top_df  = cdf.head(top_k).copy()
-                rest_df = cdf.iloc[top_k:]
-                others_pct = float(rest_df["Percentage"].sum()) if not rest_df.empty else 0.0
+                unknown_row      = cdf[cdf["Country"] == "Unknown"]
+                non_unknown_rows = cdf[cdf["Country"] != "Unknown"]
+                top_non_unknown  = non_unknown_rows.head(top_k).copy()
 
-                rows = [top_df]
+                cdf_final = pd.concat([top_non_unknown, unknown_row], ignore_index=True) \
+                            .drop_duplicates(subset=["Country"])
+
+                # Optional "All other countries" (excluding Unknown)
+                remainder = non_unknown_rows.iloc[top_k:]
+                others_pct = float(remainder["Percentage"].sum()) if not remainder.empty else 0.0
                 if others_pct > 0:
-                    rows.append(pd.DataFrame([{"Country": "All other countries", "Percentage": others_pct}]))
-
-                cdf_final = pd.concat(rows, ignore_index=True) if rows else top_df
+                    cdf_final = pd.concat(
+                        [cdf_final, pd.DataFrame([{"Country": "All other countries", "Percentage": others_pct}])],
+                        ignore_index=True
+                    )
 
                 text_labels = cdf_final["Percentage"].round(1).astype(str) + "%"
-                fig = px.bar(cdf_final, x="Country", y="Percentage", title=f"Country Distribution (%) – {cat_type}: {selected_cat}", text=text_labels)
+                fig = px.bar(
+                    cdf_final,
+                    x="Country",
+                    y="Percentage",
+                    title=f"Country Distribution (%) – {cat_type}: {selected_cat}",
+                    text=text_labels,
+                )
                 fig.update_traces(textposition="outside", cliponaxis=False)
                 ymax = min(100.0, float(cdf_final["Percentage"].max()) + 10.0) if not cdf_final.empty else 100.0
                 fig.update_layout(yaxis_range=[0, ymax], xaxis_tickangle=-45)
