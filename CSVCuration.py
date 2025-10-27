@@ -16,7 +16,7 @@ file_path_cost = 'Capstone Project 2025 - Programme_V4C.xlsx'
 
 # Use the 'header' parameter to specify the row number (0-based index) to use as the header.`
 df_programme = pd.read_excel(file_path_programme, header=12)
-df_cost = pd.read_excel(file_path_cost)
+df_cost = pd.read_excel(file_path_cost, header=0)
 
 columns_to_drop_programme = df_programme.columns[:3] # Drop the first 3 columns
 rows_to_drop_programme = df_programme.index[31981:] # Drop rows showing total
@@ -371,6 +371,9 @@ curated['Domain'] = curated['Topic_Label'].apply(lambda x: topic_mapping.get(x, 
 curated.drop(columns=['Topic_Label', 'Job Title Tagged'], inplace=True)
 
 df_cost.rename(columns={'Programme Name': 'Truncated Programme Name'}, inplace=True)
+
+# df_cost.to_csv("cost.csv", index=False)
+# curated.to_csv("programme_curated.csv", index=False)
 
 curated = curated.merge(df_cost, how='left', on='Truncated Programme Name')
 
