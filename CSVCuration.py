@@ -12,8 +12,7 @@ import os
 
 from typing import Optional, Tuple, Union
 
-
-def curate_programme_and_cost_data(programme_file, cost_file, *, output_path: Optional[str] = None, return_csv_bytes: bool = False) -> Union[pd.DataFrame, bytes, Tuple[pd.DataFrame, bytes]]:
+def curate_programme_and_cost_data(programme_file, cost_file, output_path: Optional[str] = None, return_csv_bytes: bool = False) -> Union[pd.DataFrame, bytes, Tuple[pd.DataFrame, bytes]]:
     """
     Curate programme and cost data.
 
@@ -31,7 +30,7 @@ def curate_programme_and_cost_data(programme_file, cost_file, *, output_path: Op
     if programme_file is None or cost_file is None:
         return None
 
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false" 
 
     file_path_programme = 'Capstone_Project_AnonyVBA_V4A.xlsm'
     file_path_cost = 'Capstone Project 2025 - Programme_V4C.xlsx'
@@ -213,99 +212,78 @@ def curate_programme_and_cost_data(programme_file, cost_file, *, output_path: Op
     ]
 
     curated = df_programme[[c for c in cols_for_dashboard if c in df_programme.columns]].copy()
-
-
+    
     # Has to go after seniority
-    def preprocess_job_titles(df: pd.DataFrame, title_col='Job Title Clean', seniority_col='Seniority') -> pd.DataFrame:
-        """
-        Preprocess job titles for BERTopic clustering:
-        1. Replace unknown/non-letter titles (likely present because the Chinese job titles have been stripped)
-        2. Replace code-like (e.g. job titles with no meaning like A056F00000FMEIE, A056F00000FMEVY)
-        3. Remove single-letter titles
-        4. Remove generic terms if part of job title (may affect clustering. e.g. "Sales Manager" will be reduced to "Sales")
-        5. Drop fully generic or too-short titles
-            - e.g. titles that are just "CEO", "Director" will be dropped as there is no semantic meaning about the job title's industry
-            - semantically meaningful exceptions e.g. HR or HRBP will be retained
-        6. Remove short titles (e.g. "CFO","CTO","MGR")
-        7. Normalise text
+    def preprocess_job_titles(df: pd.DataFrame, title_col='Job Title Clean', seniority_col='Seniority') -> Tuple[pd.DataFrame, pd.DataFrame]:
+      """
+      Preprocess job titles for BERTopic clustering.
+      Returns a tuple: (cleaned_df_for_clustering, dropped_df)
+      All rows that are generic or turned 'UNKNOWN' are returned as dropped_df.
+      """
+      df = df.copy()
+      
+      # Track rows that will eventually be dropped
+      df['_drop_flag'] = False
 
-        Returns a cleaned copy of the dataframe.
-        """
+      # 1. Replace non-letter titles with "UNKNOWN"
+      mask_non_letters = ~df[title_col].str.contains(r'[A-Za-z]', na=False)
+      df.loc[mask_non_letters, [title_col, seniority_col]] = "UNKNOWN"
+      df.loc[mask_non_letters, '_drop_flag'] = True
 
-        df = df.copy()
+      # 2. Replace code-like titles (digits but no spaces) with "UNKNOWN"
+      code_mask = df[title_col].str.contains(r'\d', na=False) & ~df[title_col].str.contains(r'\s', na=False)
+      df.loc[code_mask, [title_col, seniority_col]] = "UNKNOWN"
+      df.loc[code_mask, '_drop_flag'] = True
 
-        # 1. Replace non-letter titles with "UNKNOWN"
-        mask_non_letters = ~df[title_col].str.contains(r'[A-Za-z]', na=False)
-        df.loc[mask_non_letters, [title_col, seniority_col]] = "UNKNOWN"
+      # 3. Replace single-letter titles with "UNKNOWN"
+      single_letter_mask = df[title_col].str.strip().str.len() == 1
+      df.loc[single_letter_mask, [title_col, seniority_col]] = "UNKNOWN"
+      df.loc[single_letter_mask, '_drop_flag'] = True
 
-        # 2. Replace code-like titles (digits but no spaces) with "UNKNOWN"
-        code_mask = (
-            df[title_col].str.contains(r'\d', na=False) &
-            ~df[title_col].str.contains(r'\s', na=False)
-        )
-        df.loc[code_mask, [title_col, seniority_col]] = "UNKNOWN"
+      # 4. Replace short titles (<3 letters) not in meaningful list
+      meaningful_titles = ["CEO", "VP", "AVP", "CFO", "COO", "GM", "MD", "SVP", "CTO"]
+      short_mask = (df[title_col].str.len() < 3) & (~df[title_col].isin(meaningful_titles))
+      df.loc[short_mask, [title_col, seniority_col]] = "UNKNOWN"
+      df.loc[short_mask, '_drop_flag'] = True
 
-        # 3. Replace single-letter titles with "UNKNOWN"
-        single_letter_mask = df[title_col].str.strip().str.len() == 1
-        df.loc[single_letter_mask, [title_col, seniority_col]] = "UNKNOWN"
+      # 5. Track and drop fully generic titles
+      generic_terms = [
+          "UNKNOWN","CEO","CHIEF","CFO","COO","PRESIDENT","VICE CHAIR","CTO","CIO","CDO","CMO",
+          "EVP","SVP","VICE PRESIDENT","VP","DIRECTOR","HEAD","GENERAL MANAGER","GM","AVP","MD",
+          "ASSISTANT MANAGER","ASST MANAGER","DEPUTY MANAGER",
+          "LEAD","SENIOR","SR ","SR.","MANAGER","COMMANDER","EXEC","MGR",
+          "STAFF","PRINCIPAL","ASSOCIATE",
+          "DEPUTY","VICE","ASSISTANT","ASST","EXECUTIVE","SECRETARY","CHAIRMAN","PERSONNEL",
+          "MANAGING","OFFICER","OWNER","CHEIF","PARTNER","FOUNDER","COFOUNDER",
+          "REGIONAL","APAC","SINGAPORE","REGION","ASEAN","ASIA","PACIFIC","GLOBAL","CHINA","GROUP","BRANCH","LOCAL",
+          "COUNTRY","DIVISION","SECTION","AREA",
+          "GENERAL","SERVICES","PROFESSIONAL","STRATEGIC"
+      ]
+      generic_mask = df[title_col].isin(generic_terms)
+      df.loc[generic_mask, '_drop_flag'] = True
 
-        # 4. Replace short titles (<3 letters) not in meaningful list
-        meaningful_titles = ["CEO", "VP", "AVP", "CFO", "COO", "GM", "MD", "SVP", "CTO"]
-        short_mask = (df[title_col].str.len() < 3) & (~df[title_col].isin(meaningful_titles))
-        df.loc[short_mask, [title_col, seniority_col]] = "UNKNOWN"
+      # Split into cleaned and dropped rows 
+      dropped_rows = df[df['_drop_flag']].copy()
+      cleaned_df = df[~df['_drop_flag']].copy()
 
-        # 5. Remove fully generic titles / generic words
-        generic_terms = [
-            "UNKNOWN","CEO","CHIEF","CFO","COO","PRESIDENT","VICE CHAIR","CTO","CIO","CDO","CMO",
-            "EVP","SVP","VICE PRESIDENT","VP","DIRECTOR","HEAD","GENERAL MANAGER","GM","AVP","MD",
-            "ASSISTANT MANAGER","ASST MANAGER","DEPUTY MANAGER",
-            "LEAD","SENIOR","SR ","SR.","MANAGER","COMMANDER","EXEC","MGR",
-            "STAFF","PRINCIPAL","ASSOCIATE",
-            "DEPUTY","VICE","ASSISTANT","ASST","EXECUTIVE","SECRETARY","CHAIRMAN","PERSONNEL",
-            "MANAGING","OFFICER","OWNER","CHEIF","PARTNER","FOUNDER","COFOUNDER",
-            "REGIONAL","APAC","SINGAPORE","REGION","ASEAN","ASIA","PACIFIC","GLOBAL","CHINA","GROUP","BRANCH","LOCAL",
-            "COUNTRY","DIVISION","SECTION","AREA",
-            "GENERAL","SERVICES","PROFESSIONAL","STRATEGIC"
-        ]
+      # Drop the temporary flag
+      cleaned_df.drop(columns=['_drop_flag'], inplace=True)
+      dropped_rows.drop(columns=['_drop_flag'], inplace=True)
 
-        # Drop rows where the entire title is generic
-        df = df[~df[title_col].isin(generic_terms)].copy()
+      return cleaned_df.reset_index(drop=True), dropped_rows.reset_index(drop=True)
 
-        # Compile regex pattern to remove generic terms from titles
-        pattern = re.compile(r'\b(?:' + '|'.join(map(re.escape, generic_terms)) + r')\b', flags=re.IGNORECASE)
+    curated_cleaned, dropped_titles = preprocess_job_titles(curated)
 
-        def remove_generic_terms(title):
-            if not isinstance(title, str):
-                return title
-            cleaned = pattern.sub('', title)
-            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-            return cleaned
-
-        df[title_col] = df[title_col].apply(remove_generic_terms)
-
-        # 6. Remove titles shorter than 4 characters unless in exceptions
-        exceptions = ["HR", "HRBP"]
-        df = df[df[title_col].apply(lambda x: isinstance(x, str) and (len(x) >= 4 or x in exceptions))].copy()
-
-        # 7. Normalize text (lowercase)
-        df[title_col] = df[title_col].str.lower()
-
-        df.reset_index(drop=True, inplace=True)
-
-        return df
-
-    curated = preprocess_job_titles(curated)
-
-    # Preprocess job titles for better embedding
     def preprocess_title(title):
         if pd.isna(title):
             return ""
         title = str(title).lower()
-        # Remove special characters but keep meaningful words
         title = re.sub(r'[^\w\s]', ' ', title)
-        title = re.sub(r'\b(?:of|and|for|the)\b', '', title) # remove stopwords
+        title = re.sub(r'\b(?:of|and|for|the)\b', '', title)
         title = re.sub(r'\s+', ' ', title).strip()
         return title
+
+    curated_cleaned['Job Title Clean'] = curated_cleaned['Job Title Clean'].apply(preprocess_title)
 
     # Domain tagging
     domain_keywords = {
@@ -330,45 +308,28 @@ def curate_programme_and_cost_data(programme_file, cost_file, *, output_path: Op
         for domain, keywords in domain_keywords.items():
             if any(k in title_lower for k in keywords):
                 added_domains.append(domain)
-        # Append domain labels to job title for embedding
         return title + " " + " ".join(added_domains) if added_domains else title
 
-    curated['Job Title Clean'] = curated['Job Title Clean'].apply(preprocess_title)
-
-    # Create new column after tagging
-    curated['Job Title Tagged'] = curated['Job Title Clean'].apply(add_domain_keywords)
-
-    # Load pre-trained sentence transformer model
+    curated_cleaned['Job Title Tagged'] = curated_cleaned['Job Title Clean'].apply(add_domain_keywords)
+ 
     model = SentenceTransformer('all-MiniLM-L6-v2')
-    embeddings = model.encode(curated['Job Title Tagged'].tolist(), show_progress_bar=False)
+    embeddings = model.encode(curated_cleaned['Job Title Tagged'].tolist(), show_progress_bar=False)
+ 
+    umap_model = umap.UMAP(n_neighbors=50, n_components=5, metric='cosine', random_state=42)
+    hdbscan_model = hdbscan.HDBSCAN(min_cluster_size=50, min_samples=1, metric='euclidean', cluster_selection_method='eom')
 
-    umap_model = umap.UMAP(
-        n_neighbors=50,
-        n_components=5,
-        metric='cosine',
-        random_state=42
-    )
+    topic_model = BERTopic(umap_model=umap_model, hdbscan_model=hdbscan_model, embedding_model=model)
+    topics, probs = topic_model.fit_transform(curated_cleaned['Job Title Tagged'].tolist(), embeddings=embeddings)
+    topic_model.reduce_topics(curated_cleaned['Job Title Tagged'].tolist(), nr_topics=20)
+ 
+    curated_cleaned['Topic_Label'] = topic_model.topics_
+  
+    dropped_titles['Domain'] = "Others"
+    dropped_titles['Topic_Label'] = -1  # for consistency
+    dropped_titles['Job Title Tagged'] = pd.NA
 
-    hdbscan_model = hdbscan.HDBSCAN(
-        min_cluster_size=50,  # larger = fewer clusters
-        min_samples=1,       # higher = more conservative
-        metric='euclidean',
-        cluster_selection_method='eom'
-    )
+    curated = pd.concat([curated_cleaned, dropped_titles], ignore_index=True)
 
-    topic_model = BERTopic(
-        umap_model=umap_model,
-        hdbscan_model=hdbscan_model,
-        embedding_model=model
-    )
-
-    topics, probs = topic_model.fit_transform(curated['Job Title Tagged'].tolist(), embeddings=embeddings)
-    topic_model.reduce_topics(curated['Job Title Tagged'].tolist(), nr_topics=20)
-
-    # Get updated topic labels for each job title post-topic reduction
-    curated['Topic_Label'] = topic_model.topics_
-
-    # Define topic mapping for appropriate topics.
     # Some topics e.g. topic 16 will not be useful, so classify them under "Others"
     topic_mapping = {
         -1: "Others",
@@ -390,12 +351,13 @@ def curate_programme_and_cost_data(programme_file, cost_file, *, output_path: Op
     # Map topic numbers to names, fallback to "Others" for anything else
     curated['Domain'] = curated['Topic_Label'].apply(lambda x: topic_mapping.get(x, "Others"))
 
-    curated.drop(columns=['Topic_Label', 'Job Title Tagged'], inplace=True)
+    curated.drop(columns=['Topic_Label', 'Job Title Tagged', 'Job Title Clean'], inplace=True)
+    curated.rename(columns={'Organisation Name: Organisation Name': 'Organisation Name'}, inplace=True)
 
     df_cost.rename(columns={'Programme Name': 'Truncated Programme Name'}, inplace=True)
 
-    # df_cost.to_csv("cost.csv", index=False)
-    # curated.to_csv("programme_curated.csv", index=False)
+    df_cost.to_csv("cost.csv", index=False)
+    curated.to_csv("programme_curated.csv", index=False)
 
     curated = curated.merge(df_cost, how='left', on='Truncated Programme Name')
 
@@ -422,4 +384,4 @@ def curate_programme_and_cost_data(programme_file, cost_file, *, output_path: Op
             return df_dashboard_filtered, csv_bytes
         return csv_bytes
 
-    return df_dashboard_filtered
+    return df_dashboard_filtered 
