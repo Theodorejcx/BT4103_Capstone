@@ -4,6 +4,8 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 
+import CSVCuration
+
 st.set_page_config(page_title="EE Analytics Dashboard", layout="wide")
 
 # ------------------------------
@@ -44,6 +46,38 @@ def load_data(path: str = "dashboard_curated_v2.csv") -> pd.DataFrame:
 
 
 # Allow user to upload a newer CSV (optional)
+new_uploaded_programme = st.sidebar.file_uploader("Upload a new programme CSV (optional)", type=["xlsm", "xlsx", "csv"])
+new_uploaded_cost = st.sidebar.file_uploader("Upload a new cost CSV (optional)", type=["xlsm", "xlsx", "csv"])
+# call the function and request CSV bytes
+res = CSVCuration.curate_programme_and_cost_data(new_uploaded_programme, new_uploaded_cost, return_csv_bytes=True)
+
+# res may be None, bytes, a DataFrame, or (DataFrame, bytes)
+csv_bytes = None
+df_curated = None
+if res is None:
+    csv_bytes = None
+elif isinstance(res, tuple):
+    df_curated, csv_bytes = res
+elif isinstance(res, (bytes, bytearray)):
+    csv_bytes = bytes(res)
+elif isinstance(res, pd.DataFrame):
+    df_curated = res
+    # produce bytes so the download button can work
+    try:
+        csv_bytes = df_curated.to_csv(index=False).encode("utf-8-sig")
+    except Exception:
+        csv_bytes = None
+
+if csv_bytes is not None:
+    st.sidebar.download_button(
+        "Download curated CSV",
+        data=csv_bytes,
+        file_name="dashboard_curated.csv",
+        mime="text/csv"
+    )
+else:
+    # No curated CSV available yet; show a helpful note instead of an invalid download button
+    st.sidebar.info("No curated CSV available — upload both programme and cost files to generate a curated CSV.")
 uploaded = st.sidebar.file_uploader("Upload a curated CSV (optional)", type=["csv"])
 data_path = uploaded if uploaded is not None else "dashboard_curated_v2.csv"
 
@@ -86,7 +120,12 @@ def _col_from_label(label: str) -> str:
 
 def multiselect_with_all_button(label: str, df_source: pd.DataFrame, default_all: bool = True):
     col = _col_from_label(label)
-    s = df_source.get(col, pd.Series([], dtype="object")).copy().fillna("Unknown")
+    raw = df_source.get(col, pd.Series([], dtype="object")).copy()
+    # If the column is categorical, convert to string first so fillna can add 'Unknown'
+    if pd.api.types.is_categorical_dtype(raw):
+        s = raw.astype("string").fillna("Unknown")
+    else:
+        s = raw.fillna("Unknown")
     options = sorted(s.unique().tolist())
 
     ms_key = _safe_key(label, "multi")
@@ -106,7 +145,11 @@ def multiselect_with_all_button(label: str, df_source: pd.DataFrame, default_all
 def apply_filter(series: pd.Series, selected: list[str]) -> pd.Series:
     if selected is None:
         return pd.Series(True, index=series.index)
-    s = series.fillna("Unknown")
+    # Avoid fillna on Categorical dtype (raises if the fill value is not a category)
+    if pd.api.types.is_categorical_dtype(series):
+        s = series.astype("string").fillna("Unknown")
+    else:
+        s = series.fillna("Unknown")
     all_opts = set(s.unique().tolist())
     sel_set  = set(selected or [])
     if not selected or sel_set == all_opts:
@@ -241,7 +284,12 @@ with st.sidebar:
         for label in UI_FILTER_LABELS:
             ms_key = _safe_key(label, "multi")
             col = _col_from_label(label)
-            series = df.get(col, pd.Series([], dtype="object")).fillna("Unknown")
+            series = df.get(col, pd.Series([], dtype="object")).copy()
+            # Avoid fillna on Categorical (can't add a new category) by casting to string first
+            if pd.api.types.is_categorical_dtype(series):
+                series = series.astype("string").fillna("Unknown")
+            else:
+                series = series.fillna("Unknown")
             st.session_state[ms_key] = sorted(series.unique().tolist())
         if "run_month_full_span" in st.session_state:
             st.session_state["run_month_range"] = st.session_state["run_month_full_span"]
@@ -590,7 +638,7 @@ with tab_6:
 
         if (cat_col in df_f.columns) and ("Age_Group" in df_f.columns):
             cat_values = (
-                df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist()
+                df_f[cat_col].astype("string").fillna("Unknown").replace({"": "Unknown"}).unique().tolist()
             )
             # Put Unknown last
             cat_values = [v for v in sorted(cat_values) if v != "Unknown"] + (
@@ -598,7 +646,7 @@ with tab_6:
             )
             selected_cat = st.selectbox(f"Select {cat_type}:", cat_values, key="age_cat_select")
 
-            subset = df_f[df_f[cat_col].fillna("Unknown").astype(str) == selected_cat].copy()
+            subset = df_f[df_f[cat_col].astype("string").fillna("Unknown") == selected_cat].copy()
             if subset.empty:
                 st.info("No rows for this selection.")
             else:
@@ -659,12 +707,12 @@ with tab_6:
 
         if (cat_col in df_f.columns) and (country_col in df_f.columns):
             cat_values = (
-                df_f[cat_col].fillna("Unknown").astype(str).replace({"": "Unknown"}).unique().tolist()
+                df_f[cat_col].astype("string").fillna("Unknown").replace({"": "Unknown"}).unique().tolist()
             )
             cat_values = [v for v in sorted(cat_values) if v != "Unknown"] + (["Unknown"] if "Unknown" in cat_values else [])
             selected_cat = st.selectbox(f"Select {cat_type}:", cat_values, key="country_cat_select")
 
-            subset = df_f[df_f[cat_col].fillna("Unknown").astype(str) == selected_cat].copy()
+            subset = df_f[df_f[cat_col].astype("string").fillna("Unknown") == selected_cat].copy()
             if subset.empty:
                 st.info("No rows for this selection.")
             else:
