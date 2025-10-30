@@ -807,6 +807,27 @@ with tab_7:
             fig_trend.update_layout(yaxis_title="Total Revenue ($)", xaxis_title="Month")
             plotly_show(fig_trend, prefix="tab7_monthly_revenue")
 
+            st.divider()
+            st.markdown("##### Top K Countries by Total Revenue")
+
+            if "Country Of Residence" in df_cost.columns:
+                top_countries = (
+                    df_cost.groupby("Country Of Residence")["Programme Cost"]
+                    .sum()
+                    .nlargest(top_k)
+                    .reset_index()
+                )
+                top_countries.columns = ["Country Of Residence", "Total Revenue"]
+
+                fig2 = px.bar(
+                    top_countries,
+                    x="Total Revenue",
+                    y="Country Of Residence",
+                    orientation="h",
+                    title=f"Top {top_k} Countries by Total Revenue" 
+                )
+                st.plotly_chart(fig2, use_container_width=True, theme="streamlit") 
+
 # --- Tab 8: Programme Deep Dive
 with tab_8:
     st.subheader("Programme Deep Dive")
@@ -828,7 +849,7 @@ with tab_8:
         st.info("No rows for this programme with current filters.")
         st.stop()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         st.metric("Participants", f"{len(p):,}")
     with c2:
@@ -837,6 +858,8 @@ with tab_8:
         st.metric("Countries", int(p.get("Country Of Residence", pd.Series()).nunique() if "Country Of Residence" in p.columns else 0))
     with c4:
         st.metric("Median Age", f"{p['Age'].median():.0f}" if "Age" in p.columns and p["Age"].notna().any() else "—")
+    with c5:
+        st.metric("Cost", p["Programme Cost"].unique() if p["Programme Cost"].notna().any() else "Unknown")
     date_min = pd.to_datetime(p.get("Programme Start Date")).min() if "Programme Start Date" in p.columns else pd.NaT
     date_max = pd.to_datetime(p.get("Programme End Date")).max() if "Programme End Date" in p.columns else pd.NaT
     if pd.notna(date_min) and pd.notna(date_max):
